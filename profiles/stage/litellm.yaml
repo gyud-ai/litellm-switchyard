@@ -28,6 +28,24 @@ router_settings:
   plugins:
     - stage_scoped.PLUGIN
 
+# Headroom compression (https://docs.litellm.ai/docs/proxy/headroom):
+# LiteLLM calls POST {api_base}/v1/compress with {messages, model} in the
+# pre_call step, then forwards the compressed payload to the backend itself.
+# Routing already happened by then, so Switchyard scores pristine client
+# messages; compression is in-flight only and never rewrites the client's
+# stored history (next-turn routing still sees originals).
+# `default_on` is env-owned (HEADROOM_DEFAULT_ON=false keeps it opt-in via
+# per-request `guardrails` / per-key attach; =true compresses every request
+# on both tiers). Pydantic coerces "true"/"false" to bool (verified live);
+# never leave it empty (validation error) — compose defaults it to "false".
+guardrails:
+  - guardrail_name: headroom-compression
+    litellm_params:
+      guardrail: headroom
+      mode: pre_call
+      api_base: os.environ/HEADROOM_API_BASE
+      default_on: os.environ/HEADROOM_DEFAULT_ON
+
 litellm_settings:
   # Forward client x-* headers (e.g. x-opencode-session, required by the
   # expensive Console Go backend) to providers, scoped to this group only.

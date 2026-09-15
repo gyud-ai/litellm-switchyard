@@ -74,3 +74,79 @@ def test_dockerfile_smoke_test_covers_bundled_toml():
     dockerfile = (REPO_ROOT / "Dockerfile").read_text()
     assert "profiles/stage/switchyard.toml" in dockerfile
     assert "ROUTING_PLUGIN" in dockerfile
+
+
+def test_litellm_yaml_defines_headroom_pre_call_guardrail_opt_in():
+    """Headroom must run as a pre_call guardrail AFTER routing (opt-in first).
+
+    Routing (router_settings.plugins) scores pristine client messages; the
+    guardrail POSTs {messages, model} to the sidecar and LiteLLM forwards the
+    compressed payload itself. `default_on: false` keeps the rollout opt-in
+    via per-request `guardrails` / per-key attach until live tests go green.
+    """
+    with open(REPO_ROOT / "profiles" / "stage" / "litellm.yaml") as fh:
+        config = yaml.safe_load(fh)
+    guardrails = config.get("guardrails")
+    assert isinstance(guardrails, list) and len(guardrails) == 1, guardrails
+    entry = guardrails[0]
+    assert entry.get("guardrail_name") == "headroom-compression", entry
+    params = entry.get("litellm_params", {})
+    assert params.get("guardrail") == "headroom", params
+    assert params.get("mode") == "pre_call", params
+    assert params.get("api_base") == "os.environ/HEADROOM_API_BASE", params
+    # Env-owned so flipping needs no YAML edit. The value must stay an
+    # os.environ/ reference (LiteLLM interpolates whole values only) pointing
+    # at a strict true/false string: pydantic coerces to bool (verified live
+    # in-container), while an empty string fails proxy startup.
+    assert params.get("default_on") == "os.environ/HEADROOM_DEFAULT_ON", params
+
+
+def test_compose_defines_single_headroom_sidecar():
+    """One stateless Headroom sidecar; backends stay direct (no api_base chain)."""
+    import re
+
+    compose = (REPO_ROOT / "compose.yaml").read_text()
+    # Single headroom service built from the pinned Dockerfile.
+    assert "dockerfile: Dockerfile.headroom" in compose
+    assert "litellm-headroom:0.27.0" in compose
+    # Mandatory sidecar env: remote access (else /v1/compress 404s) + user-role
+    # compression (else requests_compressed stays 0) + local-only telemetry.
+    assert 'HEADROOM_COMPRESS_ALLOW_REMOTE: "1"' in compose
+    assert 'HEADROOM_COMPRESS_USER_MESSAGES: "1"' in compose
+    assert 'HEADROOM_TELEMETRY: "on"' in compose
+    assert 'HEADROOM_BEACON: "off"' in compose
+    # LiteLLM reaches the sidecar internally; backends are NOT rewired.
+    assert "HEADROOM_API_BASE: http://headroom:8787" in compose
+    assert "HEADROOM_DEFAULT_ON: ${HEADROOM_DEFAULT_ON:-false}" in compose
+    assert "http://headroom-cheap" not in compose
+    assert "http://headroom-expensive" not in compose
+    assert "REAL_CHEAP_API_BASE" not in compose
+    # Loopback-only stats port for host pytest, never public.
+    assert "127.0.0.1:${HEADROOM_PORT:-8788}:8787" in compose
+    assert re.search(r"headroom:\s*\n\s*condition: service_started", compose), (
+        "litellm must depend on headroom (service_started so a slow sidecar "
+        "cannot block boot; fail-open behavior is asserted live)"
+    )
+
+
+def test_compose_binds_litellm_to_configurable_loopback_by_default():
+    """Proxy bind is env-owned, loopback by default, never bare 0.0.0.0."""
+    compose = (REPO_ROOT / "compose.yaml").read_text()
+    assert "${LITELLM_IP:-127.0.0.1}:${LITELLM_PORT:-4000}:4000" in compose
+    assert '"0.0.0.0:${LITELLM_PORT' not in compose
+    env_example = (REPO_ROOT / ".env.example").read_text()
+    assert "LITELLM_IP=127.0.0.1" in env_example
+
+
+def test_dockerfile_headroom_pins_version():
+    dockerfile = (REPO_ROOT / "Dockerfile.headroom").read_text()
+    assert "python:3.13-slim" in dockerfile
+    assert "headroom-ai[proxy]==0.27.0" in dockerfile
+    assert '"--host", "0.0.0.0", "--port", "8787"' in dockerfile
+
+
+def test_env_example_documents_headroom():
+    env_example = (REPO_ROOT / ".env.example").read_text()
+    assert "HEADROOM_PORT=8788" in env_example
+    assert "HEADROOM_LOG_LEVEL=warning" in env_example
+    assert "HEADROOM_DEFAULT_ON=false" in env_example
