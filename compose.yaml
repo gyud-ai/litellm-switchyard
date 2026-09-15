@@ -26,7 +26,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.headroom
-    image: litellm-headroom:0.27.0
+    # Prebuilt GHCR image (published by .github/workflows/publish.yml).
+    # Override with HEADROOM_IMAGE, or rebuild locally via --build.
+    image: ${HEADROOM_IMAGE:-ghcr.io/gyud-ai/litellm-switchyard-headroom:0.27.0}
     restart: unless-stopped
     environment:
       # LiteLLM calls from another container (non-loopback): without this,
@@ -64,7 +66,9 @@ services:
       dockerfile: Dockerfile
       args:
         SWITCHYARD_REF: ${SWITCHYARD_REF:-db9c9632e33686e6049d22722a5df2fb92cd62ef}
-    image: litellm-switchyard:1.97.0
+    # Prebuilt GHCR image (published by .github/workflows/publish.yml).
+    # Override with LITELLM_IMAGE, or rebuild locally via --build.
+    image: ${LITELLM_IMAGE:-ghcr.io/gyud-ai/litellm-switchyard-proxy:1.97.0}
     command: ["--config", "/app/deployment/litellm.yaml", "--port", "4000"]
     environment:
       DATABASE_URL: postgresql://llmproxy:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/litellm

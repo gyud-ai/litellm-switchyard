@@ -40,7 +40,7 @@ Prerequisites: Docker with Compose v2, and [`uv`](https://docs.astral.sh/uv/) if
 ```bash
 cp .env.example .env
 # edit .env (see table below), then:
-docker compose up -d --build --wait
+docker compose up -d --wait   # pulls prebuilt GHCR images (~2.4 GB first run)
 curl -fsS http://127.0.0.1:4000/health/liveliness   # "I'm alive!"
 
 curl -i http://127.0.0.1:4000/v1/chat/completions \
@@ -128,7 +128,7 @@ LiteLLM strips unknown request headers by default. `litellm.yaml` enables `forwa
 
 ### Sizing
 
-Measured idle without Headroom: proxy ~720 MiB, postgres ~70 MiB; images ~2.4 GB total. The Headroom sidecar adds ~0.6–1 GB (ONNX embedder; x86 needs AVX2), so run **4 vCPU / 8 GB RAM with a 30–40 GB disk**, no GPU needed. 4/4 boots but goes tight under parallel live tests. Build images elsewhere if your VM is small: the Rust/maturin build is the slow, disk-hungry step; the VM only needs to pull and run.
+Measured idle without Headroom: proxy ~720 MiB, postgres ~70 MiB; images ~2.4 GB total. The Headroom sidecar adds ~0.6–1 GB (ONNX embedder; x86 needs AVX2), so run **4 vCPU / 8 GB RAM with a 30–40 GB disk**, no GPU needed. 4/4 boots but goes tight under parallel live tests. Images come prebuilt from GHCR (see `.github/workflows/publish.yml`); pass `--build` only when Dockerfiles or build args (`SWITCHYARD_REF`) change.
 
 ### Tests
 
@@ -151,7 +151,8 @@ Static checks pin the deployment order/count, plugin registration, TOML policy, 
 - No `x-litellm-applied-guardrails` header → one of three things: request didn't opt in (`HEADROOM_DEFAULT_ON=false` needs per-request `guardrails` / per-key attach), there was nothing compressible (fully-protected short turns return early *without* the header even when scheduled), or bypass was sent. The header proves scheduling only; a present header with bypass sent or sidecar down means *no* compression happened — check `guardrail_information` in the spend log.
 - Litellm boot-loops after touching Headroom env → `HEADROOM_DEFAULT_ON` empty or non-boolean; must be exactly `true`/`false` (compose defaults unset/empty to `false`).
 - Opted-in call with no `guardrail_information` in its spend row → compression silently didn't run (sidecar down is observed fail-open: HTTP 200 uncompressed). Check `docker compose ps headroom` and restart it.
-- `docker compose -f` … `logs litellm` is the first stop for anything else; `docker compose config` validates interpolation without starting anything. For the compression side, check the spend-log row (`/spend/logs` → `guardrail_information`: success + `tokens_saved`) or Admin UI Logs → Guardrails panel — the sidecar's own `/stats` counters only track its proxy paths, not `/v1/compress` guardrail calls, so `0` there does not mean the guardrail is idle.
+- `docker compose config` validates interpolation without starting anything. For the compression side, check the spend-log row (`/spend/logs` → `guardrail_information`: success + `tokens_saved`) or Admin UI Logs → Guardrails panel — the sidecar's own `/stats` counters only track its proxy paths, not `/v1/compress` guardrail calls, so `0` there does not mean the guardrail is idle.
+- `pull access denied` for a `ghcr.io/gyud-ai/*` image → the GHCR package may still be private (flip it to public under the package settings) or the publish workflow hasn't run yet; until then, `docker compose up -d --build` compiles locally.
 
 ### Updating the Switchyard pin
 

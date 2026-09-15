@@ -16,7 +16,10 @@ process.
 - `plugins/stage_scoped.py` — shim registered as the router plugin; delegates
   to the upstream TOML-built plugin only for the configured pair.
 - `Dockerfile` / `Dockerfile.headroom` — image builds (Switchyard wheel /
-  headroom-ai pin). `pyproject.toml` — uv test tooling. `tests/` — static
+  headroom-ai pin). Pushing to `main` triggers `publish.yml`, which pushes
+  version-pinned tags to GHCR; `compose.yaml` pulls those by default
+  (`LITELLM_IMAGE` / `HEADROOM_IMAGE` override, `--build` compiles locally).
+  `pyproject.toml` — uv test tooling. `tests/` — static
   (`test_config.py`) + live (`test_proxy_live.py`, `test_tools_live.py`,
   `test_headroom_guardrail.py`) checks; `tests/conftest.py` loads `.env`.
 
@@ -66,15 +69,17 @@ Done = the stated check passes.
   same group with the identical model string, own `api_base`. Done = static
   tests updated if the count changes (stage needs exactly two *unique* IDs)
   + full suite green.
-- **Bump the Switchyard pin:** set `SWITCHYARD_REF`, rebuild, re-check
-  contract 7, run the full suite. Done = build-time TOML smoke test passes
-  and all live tests green.
+- **Bump the Switchyard pin:** set `SWITCHYARD_REF`, push to `main` (publish
+  rebuilds and pushes the version tag), then redeploy with
+  `docker compose pull && docker compose up -d` (plain `up -d` reuses the
+  locally cached tag). Re-check contract 7, run the full suite. Done =
+  build-time TOML smoke test passes and all live tests green.
 - **Verify anything:** `uv run --group test pytest tests/ -m "not live"`
   (static, free) then `uv run --group test pytest tests/ -m live` (spends
   real backend calls, including one expensive-tier escalation). CI
   (`.github/workflows/ci.yml`) runs the static suite, both image builds,
   compose validation, secret hygiene, and the uv lock check on every
-  push/PR — live tests stay manual: run locally, or dispatch
+  push/PR (docs-only changes skip CI entirely) — live tests stay manual: run locally, or dispatch
   `.github/workflows/live-tests.yml` from the Actions tab / `gh workflow run`
   (needs the `live` environment secrets; `stack` builds compose in the runner,
   `external` tests a running proxy via `PROXY_URL`).

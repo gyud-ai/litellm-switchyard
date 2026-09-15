@@ -108,7 +108,7 @@ def test_compose_defines_single_headroom_sidecar():
     compose = (REPO_ROOT / "compose.yaml").read_text()
     # Single headroom service built from the pinned Dockerfile.
     assert "dockerfile: Dockerfile.headroom" in compose
-    assert "litellm-headroom:0.27.0" in compose
+    assert "ghcr.io/gyud-ai/litellm-switchyard-headroom:0.27.0" in compose
     # Mandatory sidecar env: remote access (else /v1/compress 404s) + user-role
     # compression (else requests_compressed stays 0) + local-only telemetry.
     assert 'HEADROOM_COMPRESS_ALLOW_REMOTE: "1"' in compose
@@ -127,6 +127,26 @@ def test_compose_defines_single_headroom_sidecar():
         "litellm must depend on headroom (service_started so a slow sidecar "
         "cannot block boot; fail-open behavior is asserted live)"
     )
+
+
+def test_compose_pulls_ghcr_images_with_local_build_fallback():
+    """Both services default to version-pinned GHCR images (published by
+    publish.yml) while keeping a local `build:` block, so fresh machines
+    deploy with plain `up -d` and Dockerfile work still builds locally."""
+    compose = yaml.safe_load((REPO_ROOT / "compose.yaml").read_text())
+    expected = {
+        "litellm": "ghcr.io/gyud-ai/litellm-switchyard-proxy:1.97.0",
+        "headroom": "ghcr.io/gyud-ai/litellm-switchyard-headroom:0.27.0",
+    }
+    for service, default_image in expected.items():
+        svc = compose["services"][service]
+        assert "build" in svc, f"{service} must keep a local build fallback"
+        assert default_image in svc["image"], (
+            f"{service} image must default to {default_image}"
+        )
+        assert svc.get("pull_policy") != "build", (
+            f"{service} must not force local builds (GHCR pull is the default)"
+        )
 
 
 def test_compose_binds_litellm_to_configurable_loopback_by_default():
