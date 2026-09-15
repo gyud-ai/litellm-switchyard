@@ -35,7 +35,8 @@ _load_dotenv()
 @pytest.fixture(scope="session")
 def proxy_url() -> str:
     port = os.environ.get("LITELLM_PORT", "4000")
-    return os.environ.get("PROXY_URL", f"http://127.0.0.1:{port}")
+    # `or` (not just get-default): CI sets PROXY_URL to "" when unconfigured.
+    return os.environ.get("PROXY_URL") or f"http://127.0.0.1:{port}"
 
 
 @pytest.fixture(scope="session")

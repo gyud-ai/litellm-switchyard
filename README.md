@@ -159,7 +159,7 @@ Static checks pin the deployment order/count, plugin registration, TOML policy, 
 
 ## License & attribution
 
-Apache-2.0 — see [LICENSE](LICENSE).
+Apache-2.0 — see [LICENSE](LICENSE). Release history lives in [CHANGELOG.md](CHANGELOG.md).
 
 This repo builds on three upstream projects:
 

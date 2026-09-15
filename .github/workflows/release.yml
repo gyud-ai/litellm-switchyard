@@ -1,0 +1,94 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 gyud-labs. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Tags and publishes a GitHub release when the version in pyproject.toml
+# gains a new MINOR or MAJOR number. Patch bumps are deliberately skipped:
+# they land on main untagged and roll into the next minor/major release.
+# The release is refused when CHANGELOG.md has no matching non-empty
+# section, so version and notes stay in sync (see AGENTS.md).
+name: Tag and release on minor/major bumps
+
+on:
+  push:
+    branches: [main]
+    paths: [pyproject.toml, CHANGELOG.md]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+      - run: uv run --group test pytest tests/ -m "not live"
+
+  release:
+    needs: checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Decide whether to release
+        id: decide
+        run: |
+          NEW=$(python3 -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          TAG="v$NEW"
+          echo "version=$NEW" >> "$GITHUB_OUTPUT"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists; nothing to do."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          LATEST=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)
+          if [ -z "$LATEST" ]; then
+            echo "No previous tags; releasing $TAG."
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          HIGHER=$(printf '%s\n%s\n' "$LATEST" "$TAG" | sort -V | tail -n 1)
+          if [ "$HIGHER" != "$TAG" ]; then
+            echo "$TAG is not newer than $LATEST; skipping."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          new_mm="${NEW%.*}"
+          old_mm="${LATEST#v}"; old_mm="${old_mm%.*}"
+          if [ "$new_mm" != "$old_mm" ]; then
+            echo "Minor/major bump ($LATEST -> $TAG); checking release notes."
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Patch-only change ($LATEST -> $TAG); skipping release."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          NOTES_FILE="$RUNNER_TEMP/release-notes.md"
+          awk -v ver="$NEW" '
+            index($0, "## [" ver "]") == 1 {found=1; next}
+            found && /^## / {exit}
+            found {print}
+          ' CHANGELOG.md > "$NOTES_FILE"
+          if [ ! -s "$NOTES_FILE" ]; then
+            echo "::warning::CHANGELOG.md has no notes for $TAG; skipping release. Add a ## [$NEW] section (same commit as the version bump) or push a notes-only follow-up to complete this release."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "notes=$NOTES_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Create tag and GitHub release
+        if: steps.decide.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.decide.outputs.version }}
+        run: |
+          TAG="v$VERSION"
+          git tag "$TAG"
+          git push origin "$TAG"
+          gh release create "$TAG" --title "$TAG" --notes-file "${{ steps.decide.outputs.notes }}"

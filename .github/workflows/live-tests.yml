@@ -1,0 +1,73 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 gyud-labs. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Manually triggered live tests. Start from the Actions tab ("Run workflow"),
+# with `gh workflow run live-tests.yml`, or via the REST dispatch API.
+# Spends real backend calls, so the job runs in the `live` environment —
+# add required reviewers there to gate spend. Configure the secrets below
+# (repo or `live` environment secrets) before the first run.
+name: Live tests (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "stack = build compose here and test it; external = test an already-running proxy"
+        type: choice
+        options: [stack, external]
+        default: stack
+      markers:
+        description: "pytest -m expression"
+        default: live
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-tests
+  cancel-in-progress: false
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: live
+    env:
+      LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
+      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+      CHEAP_API_BASE: ${{ secrets.CHEAP_API_BASE }}
+      CHEAP_API_KEY: ${{ secrets.CHEAP_API_KEY }}
+      CHEAP_MODEL_ID: ${{ secrets.CHEAP_MODEL_ID }}
+      EXPENSIVE_API_BASE: ${{ secrets.EXPENSIVE_API_BASE }}
+      EXPENSIVE_API_KEY: ${{ secrets.EXPENSIVE_API_KEY }}
+      EXPENSIVE_MODEL_ID: ${{ secrets.EXPENSIVE_MODEL_ID }}
+      PROXY_URL: ${{ vars.PROXY_URL }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Fail fast on static checks
+        run: uv run --group test pytest tests/ -m "not live"
+
+      - name: Bring up compose stack
+        if: inputs.target == 'stack'
+        run: |
+          cat > .env <<EOF
+          LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
+          POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+          CHEAP_API_BASE=${CHEAP_API_BASE}
+          CHEAP_API_KEY=${CHEAP_API_KEY}
+          CHEAP_MODEL_ID=${CHEAP_MODEL_ID}
+          EXPENSIVE_API_BASE=${EXPENSIVE_API_BASE}
+          EXPENSIVE_API_KEY=${EXPENSIVE_API_KEY}
+          EXPENSIVE_MODEL_ID=${EXPENSIVE_MODEL_ID}
+          HEADROOM_DEFAULT_ON=false
+          EOF
+          docker compose up -d --build --wait
+
+      - name: Run live tests
+        run: uv run --group test pytest tests/ -m "${{ inputs.markers }}"
+
+      - name: Tear down compose stack
+        if: always() && inputs.target == 'stack'
+        run: docker compose down -v
