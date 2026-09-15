@@ -1,0 +1,47 @@
+# LiteLLM proxy + Switchyard stage routing.
+# Bootstrap inventory: exactly TWO deployments under one `switchyard` group.
+# Order is load-bearing (Switchyard pins this): capable (expensive) FIRST,
+# efficient (cheap) SECOND. Do not reorder in the Admin UI.
+model_list:
+  - model_name: switchyard
+    litellm_params:
+      # NOTE: `model` must be the whole value `os.environ/...` -- LiteLLM only
+      # interpolates values that START WITH os.environ/, so `openai/os.environ/X`
+      # would be sent literally. The openai/ prefix is added in compose.yaml.
+      model: os.environ/EXPENSIVE_MODEL
+      api_base: os.environ/EXPENSIVE_API_BASE
+      api_key: os.environ/EXPENSIVE_API_KEY
+      timeout: 300
+      max_retries: 2
+  - model_name: switchyard
+    litellm_params:
+      model: os.environ/CHEAP_MODEL
+      api_base: os.environ/CHEAP_API_BASE
+      api_key: os.environ/CHEAP_API_KEY
+      timeout: 300
+      max_retries: 2
+
+router_settings:
+  # Scoped shim (plugins/stage_scoped.py): delegates to Switchyard stage
+  # routing only for this `switchyard` pair; every other model group
+  # (including GUI/DB-added models) passes through untouched.
+  plugins:
+    - stage_scoped.PLUGIN
+
+litellm_settings:
+  # Forward client x-* headers (e.g. x-opencode-session, required by the
+  # expensive Console Go backend) to providers, scoped to this group only.
+  # LiteLLM otherwise strips them; Authorization/Content-Type are never
+  # forwarded by this mechanism.
+  model_group_settings:
+    forward_client_headers_to_llm_api:
+      - switchyard
+  # Upstream object keeps the callback role: applies Switchyard's
+  # request_patch after deployment selection. Do not remove.
+  callbacks:
+    - switchyard_litellm.configuration.configured_plugin.ROUTING_PLUGIN
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  store_model_in_db: true

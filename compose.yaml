@@ -1,0 +1,64 @@
+# LiteLLM proxy + Switchyard stage routing.
+# Adapted from NVIDIA-NeMo/Switchyard examples/litellm/deployment/compose.yaml,
+# plus Postgres for virtual keys / spend tracking / Admin UI model management.
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: llmproxy
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d litellm -U llmproxy"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  litellm:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SWITCHYARD_REF: ${SWITCHYARD_REF:-db9c9632e33686e6049d22722a5df2fb92cd62ef}
+    image: litellm-switchyard:1.97.0
+    command: ["--config", "/app/deployment/litellm.yaml", "--port", "4000"]
+    environment:
+      DATABASE_URL: postgresql://llmproxy:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/litellm
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?set LITELLM_MASTER_KEY in .env}
+      SWITCHYARD_LITELLM_CONFIG: /app/deployment/switchyard.toml
+      CHEAP_API_BASE: ${CHEAP_API_BASE:?set CHEAP_API_BASE in .env}
+      CHEAP_API_KEY: ${CHEAP_API_KEY:?set CHEAP_API_KEY in .env}
+      CHEAP_MODEL_ID: ${CHEAP_MODEL_ID:?set CHEAP_MODEL_ID in .env}
+      # Full LiteLLM model strings (prefix added here because litellm.yaml can
+      # only interpolate whole `os.environ/...` values, not embed them).
+      CHEAP_MODEL: openai/${CHEAP_MODEL_ID:?set CHEAP_MODEL_ID in .env}
+      EXPENSIVE_MODEL: openai/${EXPENSIVE_MODEL_ID:?set EXPENSIVE_MODEL_ID in .env}
+      EXPENSIVE_API_BASE: ${EXPENSIVE_API_BASE:?set EXPENSIVE_API_BASE in .env}
+      EXPENSIVE_API_KEY: ${EXPENSIVE_API_KEY:?set EXPENSIVE_API_KEY in .env}
+      EXPENSIVE_MODEL_ID: ${EXPENSIVE_MODEL_ID:?set EXPENSIVE_MODEL_ID in .env}
+      # Local scoping shim lives here; upstream plugin stays on PYTHONPATH too.
+      PYTHONPATH: /app/switchyard-plugin/src:/app/plugins
+    ports:
+      - "127.0.0.1:${LITELLM_PORT:-4000}:4000"
+    volumes:
+      - ./profiles/${SWITCHYARD_LITELLM_PROFILE:-stage}:/app/deployment:ro
+      - ./plugins:/app/plugins:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness')"
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+
+volumes:
+  pgdata:

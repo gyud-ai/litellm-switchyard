@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 gyud-labs. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[project]
+name = "litellm-switchyard"
+version = "0.1.0"
+description = "LiteLLM proxy with NVIDIA Switchyard stage routing (tests and tooling)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+dependencies = []
+
+[dependency-groups]
+test = [
+    "pytest>=8",
+    "pyyaml",
+]
+
+[tool.pytest.ini_options]
+markers = [
+    "live: requires a running proxy with .env sourced (spends backend calls)",
+]
