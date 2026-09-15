@@ -1,6 +1,11 @@
-# LiteLLM proxy + Switchyard stage routing.
+# LiteLLM proxy + Switchyard stage routing + Headroom compression guardrail.
 # Adapted from NVIDIA-NeMo/Switchyard examples/litellm/deployment/compose.yaml,
-# plus Postgres for virtual keys / spend tracking / Admin UI model management.
+# plus Postgres for virtual keys / spend tracking / Admin UI model management,
+# plus a single Headroom sidecar called via the `headroom-compression`
+# pre_call guardrail (https://docs.litellm.ai/docs/proxy/headroom).
+# Backends stay direct: LiteLLM POSTs {messages, model} to
+# http://headroom:8787/v1/compress, then forwards the compressed payload
+# itself. No api_base rewiring, no second proxy hop per tier.
 services:
   db:
     image: postgres:16
@@ -16,6 +21,42 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+
+  headroom:
+    build:
+      context: .
+      dockerfile: Dockerfile.headroom
+    image: litellm-headroom:0.27.0
+    restart: unless-stopped
+    environment:
+      # LiteLLM calls from another container (non-loopback): without this,
+      # POST /v1/compress answers 404 (looks like a wrong URL, not a block).
+      HEADROOM_COMPRESS_ALLOW_REMOTE: "1"
+      # Most agent traffic is `user` role: without this, requests_compressed
+      # stays 0 (see https://docs.litellm.ai/docs/proxy/headroom).
+      HEADROOM_COMPRESS_USER_MESSAGES: "1"
+      # Local-only request stats for tests/dashboard (`/stats`); nothing
+      # leaves the machine under this switch.
+      HEADROOM_TELEMETRY: "on"
+      # Anonymous usage beacon + cross-tool opt-out: keep everything local.
+      HEADROOM_BEACON: "off"
+      DO_NOT_TRACK: "1"
+      HEADROOM_LOG_LEVEL: ${HEADROOM_LOG_LEVEL:-warning}
+    expose:
+      - "8787"
+    ports:
+      # Loopback-only stats/test access from the host (never public).
+      - "127.0.0.1:${HEADROOM_PORT:-8788}:8787"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8787/health')"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
   litellm:
     build:
@@ -39,16 +80,29 @@ services:
       EXPENSIVE_API_BASE: ${EXPENSIVE_API_BASE:?set EXPENSIVE_API_BASE in .env}
       EXPENSIVE_API_KEY: ${EXPENSIVE_API_KEY:?set EXPENSIVE_API_KEY in .env}
       EXPENSIVE_MODEL_ID: ${EXPENSIVE_MODEL_ID:?set EXPENSIVE_MODEL_ID in .env}
+      # Headroom guardrail target (pre_call POST {api_base}/v1/compress).
+      # Backends stay direct; only compression goes through the sidecar.
+      HEADROOM_API_BASE: http://headroom:8787
+      # "true" = compress every request on both tiers; "false" (default) =
+      # opt-in per-request/per-key. Pydantic coerces to bool; :- keeps unset
+      # or empty values safe (empty string would fail proxy startup).
+      HEADROOM_DEFAULT_ON: ${HEADROOM_DEFAULT_ON:-false}
       # Local scoping shim lives here; upstream plugin stays on PYTHONPATH too.
       PYTHONPATH: /app/switchyard-plugin/src:/app/plugins
     ports:
-      - "127.0.0.1:${LITELLM_PORT:-4000}:4000"
+      # Host bind is env-owned: loopback by default; set LITELLM_IP=0.0.0.0
+      # (or a specific LAN address) to serve the network. No TLS here, so
+      # prefer a tunnel/VPN over raw exposure — the master key is the only
+      # auth. Headroom stays loopback-only regardless (no-auth stats port).
+      - "${LITELLM_IP:-127.0.0.1}:${LITELLM_PORT:-4000}:4000"
     volumes:
       - ./profiles/${SWITCHYARD_LITELLM_PROFILE:-stage}:/app/deployment:ro
       - ./plugins:/app/plugins:ro
     depends_on:
       db:
         condition: service_healthy
+      headroom:
+        condition: service_started
     healthcheck:
       test:
         - CMD-SHELL
