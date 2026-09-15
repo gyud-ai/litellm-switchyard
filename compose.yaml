@@ -69,6 +69,7 @@ services:
     # Prebuilt GHCR image (published by .github/workflows/publish.yml).
     # Override with LITELLM_IMAGE, or rebuild locally via --build.
     image: ${LITELLM_IMAGE:-ghcr.io/gyud-ai/litellm-switchyard-proxy:1.97.0}
+    restart: unless-stopped
     command: ["--config", "/app/deployment/litellm.yaml", "--port", "4000"]
     environment:
       DATABASE_URL: postgresql://llmproxy:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/litellm

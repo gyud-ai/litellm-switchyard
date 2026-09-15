@@ -8,6 +8,21 @@ The version lives in `pyproject.toml` (`[project] version`).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-15
+
+### Added
+
+- Prebuilt images published to GHCR on `main` pushes; `compose.yaml`
+  pulls the version-pinned tags by default (`LITELLM_IMAGE` /
+  `HEADROOM_IMAGE` override, `--build` compiles locally).
+
+### Fixed
+
+- `restart: unless-stopped` on the `litellm` service (the proxy stayed
+  down after a crash while `db` and `headroom` restarted).
+- CI skips docs-only changes (`README.md`, `AGENTS.md`, `CHANGELOG.md`,
+  `LICENSE`).
+
 ## [0.1.0] - 2026-09-15
 
 Initial release: self-hosted LiteLLM proxy with Switchyard stage routing,
@@ -37,5 +52,6 @@ plus opt-in Headroom prompt compression.
   (`1bfe2bb`, `6f76e67`).
 - Apache-2.0 license, quickstart and setup docs.
 
-[Unreleased]: https://github.com/gyud-ai/litellm-switchyard/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/gyud-ai/litellm-switchyard/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/gyud-ai/litellm-switchyard/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/gyud-ai/litellm-switchyard/releases/tag/v0.1.0
