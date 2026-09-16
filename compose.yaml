@@ -82,9 +82,27 @@ services:
       # only interpolate whole `os.environ/...` values, not embed them).
       CHEAP_MODEL: openai/${CHEAP_MODEL_ID:?set CHEAP_MODEL_ID in .env}
       EXPENSIVE_MODEL: openai/${EXPENSIVE_MODEL_ID:?set EXPENSIVE_MODEL_ID in .env}
+      # Served context windows (backend properties; change here, not in YAML).
+      # Defaults suit a 128K local serving and a 1M frontier window; read the
+      # real values from each backend's /v1/models where available. Env values
+      # arrive as strings; LiteLLM coerces numeric strings and treats
+      # malformed ones as absent (coerce_token_limit).
+      CHEAP_MAX_INPUT_TOKENS: ${CHEAP_MAX_INPUT_TOKENS:-131072}
+      EXPENSIVE_MAX_INPUT_TOKENS: ${EXPENSIVE_MAX_INPUT_TOKENS:-1000000}
+      # Reasoning depth per tier (low/high/max). Cheap defaults to low (fast,
+      # minimal reasoning); expensive defaults to max (escalated hard turns).
+      CHEAP_REASONING_EFFORT: ${CHEAP_REASONING_EFFORT:-low}
+      # Per-tier network behavior. Values arrive as strings; LiteLLM coerces
+      # numeric strings for timeout/retries, so plain numbers work here.
+      CHEAP_MODEL_TIMEOUT: ${CHEAP_MODEL_TIMEOUT:-300}
+      CHEAP_MODEL_RETRIES: ${CHEAP_MODEL_RETRIES:-2}
       EXPENSIVE_API_BASE: ${EXPENSIVE_API_BASE:?set EXPENSIVE_API_BASE in .env}
       EXPENSIVE_API_KEY: ${EXPENSIVE_API_KEY:?set EXPENSIVE_API_KEY in .env}
       EXPENSIVE_MODEL_ID: ${EXPENSIVE_MODEL_ID:?set EXPENSIVE_MODEL_ID in .env}
+      # Reasoning depth for the expensive tier (low/high/max); default max.
+      EXPENSIVE_REASONING_EFFORT: ${EXPENSIVE_REASONING_EFFORT:-max}
+      EXPENSIVE_MODEL_TIMEOUT: ${EXPENSIVE_MODEL_TIMEOUT:-300}
+      EXPENSIVE_MODEL_RETRIES: ${EXPENSIVE_MODEL_RETRIES:-2}
       # Headroom guardrail target (pre_call POST {api_base}/v1/compress).
       # Backends stay direct; only compression goes through the sidecar.
       HEADROOM_API_BASE: http://headroom:8787

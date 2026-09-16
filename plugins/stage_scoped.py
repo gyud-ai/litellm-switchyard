@@ -11,13 +11,15 @@ model group (including models added later via the Admin UI / DB).
 
 This shim delegates to the TOML-configured upstream plugin only when the
 request's candidate pool is exactly the cheap/expensive pair defined by
-`CHEAP_MODEL_ID` / `EXPENSIVE_MODEL_ID` (with the same `openai/` prefix as
-`profiles/stage/litellm.yaml` -- keep them in sync). Anything else passes
-through untouched, preserving plain LiteLLM routing.
+`CHEAP_MODEL` / `EXPENSIVE_MODEL` (composed in `compose.yaml`; must equal
+the resolved `model:` values in `profiles/stage/litellm.yaml`). Anything
+else passes through untouched, preserving plain LiteLLM routing:
 
-Partial overlap (the pool shares one ID with the pair but is not the pair)
-almost certainly means someone edited the `switchyard` group itself, so it
-logs a warning -- but still passes through rather than failing the request.
+- a single-candidate pool (the backend-ID direct groups, or any
+  unrelated single-deployment group) passes silently — this is normal;
+- a multi-candidate pool that is not the pair logs a warning, since it
+  usually means someone edited the `switchyard` group itself — but the
+  request still passes through rather than failing.
 
 The upstream object stays registered under `litellm_settings.callbacks`, so
 Switchyard request rewrites (`signals["switchyard"]["request_patch"]`) are
@@ -47,7 +49,7 @@ def _require_env(name: str) -> str:
     return value
 
 
-# These are the full LiteLLM model strings (e.g. "openai/qwen3:8b"), composed
+# These are the full LiteLLM model strings (e.g. "openai/my-model"), composed
 # in compose.yaml from CHEAP_MODEL_ID / EXPENSIVE_MODEL_ID. They must equal
 # the resolved `model:` values in profiles/stage/litellm.yaml.
 _SWITCHYARD_PAIR = frozenset(
@@ -67,10 +69,10 @@ class _ScopedStageRouter:
             # Order is the capable/efficient contract (capable first, per
             # litellm.yaml declaration order, which LiteLLM 1.97 preserves).
             return await _STAGE_PLUGIN.run(context)
-        if set(unique) & _SWITCHYARD_PAIR:
+        if len(unique) > 1:
             logger.warning(
-                "Switchyard scope: candidate pool %r overlaps but does not equal "
-                "the switchyard pair %r; passing through without stage routing. "
+                "Switchyard scope: candidate pool %r is not the switchyard "
+                "pair %r; passing through without stage routing. "
                 "If you edited the `switchyard` group, restore exactly two "
                 "deployments (capable first, efficient second).",
                 unique,
