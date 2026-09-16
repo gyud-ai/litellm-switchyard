@@ -1,16 +1,19 @@
-# LiteLLM proxy + Switchyard stage routing: DEFAULT single-pair inventory.
-# Matches .env.example (`cp .env.example .env`).
-# Bootstrap inventory:
-# - Exactly TWO deployments under `os.environ/SWITCHYARD_GROUP`
-#   (default switchyard, settable in .env): capable FIRST, efficient SECOND.
-# - The cheap and expensive models (name derived from MODEL_ID) are also
-#   directly callable without Switchyard routing.
-# Multiple pairs: use litellm.multipair.yaml with .env.multipair instead
-# (compose picks the file via LITELLM_CONFIG_FILE).
+# LiteLLM proxy + Switchyard stage routing: TWO-PAIR variant.
+# Matches .env.multipair — use with `cp .env.multipair .env`
+# (.env.multipair sets LITELLM_CONFIG_FILE=litellm.multipair.yaml, which is
+# how compose picks this file over the default litellm.yaml).
+# Bootstrap inventory (_N suffix guideline):
+# - Pair 1: exactly TWO deployments under `os.environ/SWITCHYARD_GROUP`
+#   (default switchyard, settable in .env).
+# - Pair 2: exactly TWO deployments under `os.environ/SWITCHYARD_GROUP_2`
+#   (default switchyard_2, settable in .env).
+# - Each pair's cheap and expensive models (name derived from MODEL_ID) are
+#   also directly callable without Switchyard routing.
 # SYNC RULE: every `model:` / `api_base:` / `api_key:` value here must equal
 # the compose-composed value for the same tier (the `openai/` prefix is added
 # in compose.yaml — LiteLLM only interpolates whole `os.environ/...`
-# values). The group name must equal SWITCHYARD_GROUP.
+# values). Group names must equal SWITCHYARD_GROUP[_N]. Keep this file's
+# pair-1 blocks identical to litellm.yaml (static tests enforce this).
 # NOTE: LiteLLM only interpolates values that start with `os.environ/`
 model_list:
   # Switchyard Stage-routed models
@@ -90,12 +93,74 @@ model_list:
       supports_reasoning: true
       supports_function_calling: true
       supports_vision: false
-  # Pair 1 ends here (2 routed + 2 direct = 4 deployments). For a second
-  # pair, see litellm.multipair.yaml + .env.multipair.
+  # Pair 2 (_N suffix guideline). Group name defaults to `switchyard_2`
+  # (SWITCHYARD_GROUP_2 in .env). Capable FIRST, efficient SECOND — same
+  # order contract as pair 1. Do not reorder in the Admin UI.
+  - model_name: os.environ/SWITCHYARD_GROUP_2
+    litellm_params:
+      model: os.environ/EXPENSIVE_MODEL_2
+      api_base: os.environ/EXPENSIVE_API_BASE_2
+      api_key: os.environ/EXPENSIVE_API_KEY_2
+      timeout: os.environ/EXPENSIVE_MODEL_TIMEOUT_2
+      max_retries: os.environ/EXPENSIVE_MODEL_RETRIES_2
+      extra_body:
+        reasoning_effort: os.environ/EXPENSIVE_REASONING_EFFORT_2
+    model_info:
+      max_input_tokens: os.environ/EXPENSIVE_MAX_INPUT_TOKENS_2
+      max_output_tokens: os.environ/EXPENSIVE_MAX_OUTPUT_TOKENS_2
+      supports_reasoning: true
+      supports_function_calling: true
+      supports_vision: false
+  - model_name: os.environ/SWITCHYARD_GROUP_2
+    litellm_params:
+      model: os.environ/CHEAP_MODEL_2
+      api_base: os.environ/CHEAP_API_BASE_2
+      api_key: os.environ/CHEAP_API_KEY_2
+      timeout: os.environ/CHEAP_MODEL_TIMEOUT_2
+      max_retries: os.environ/CHEAP_MODEL_RETRIES_2
+      extra_body:
+        reasoning_effort: os.environ/CHEAP_REASONING_EFFORT_2
+    model_info:
+      max_input_tokens: os.environ/CHEAP_MAX_INPUT_TOKENS_2
+      max_output_tokens: os.environ/CHEAP_MAX_OUTPUT_TOKENS_2
+      supports_reasoning: true
+      supports_function_calling: true
+      supports_vision: false
+  - model_name: os.environ/CHEAP_MODEL_2
+    litellm_params:
+      model: os.environ/CHEAP_MODEL_2
+      api_base: os.environ/CHEAP_API_BASE_2
+      api_key: os.environ/CHEAP_API_KEY_2
+      extra_body:
+        reasoning_effort: os.environ/CHEAP_REASONING_EFFORT_2
+      timeout: os.environ/CHEAP_MODEL_TIMEOUT_2
+      max_retries: os.environ/CHEAP_MODEL_RETRIES_2
+    model_info:
+      max_input_tokens: os.environ/CHEAP_MAX_INPUT_TOKENS_2
+      max_output_tokens: os.environ/CHEAP_MAX_OUTPUT_TOKENS_2
+      supports_reasoning: true
+      supports_function_calling: true
+      supports_vision: false
+  - model_name: os.environ/EXPENSIVE_MODEL_2
+    litellm_params:
+      model: os.environ/EXPENSIVE_MODEL_2
+      api_base: os.environ/EXPENSIVE_API_BASE_2
+      api_key: os.environ/EXPENSIVE_API_KEY_2
+      extra_body:
+        reasoning_effort: os.environ/EXPENSIVE_REASONING_EFFORT_2
+      timeout: os.environ/EXPENSIVE_MODEL_TIMEOUT_2
+      max_retries: os.environ/EXPENSIVE_MODEL_RETRIES_2
+    model_info:
+      max_input_tokens: os.environ/EXPENSIVE_MAX_INPUT_TOKENS_2
+      max_output_tokens: os.environ/EXPENSIVE_MAX_OUTPUT_TOKENS_2
+      supports_reasoning: true
+      supports_function_calling: true
+      supports_vision: false
 
 router_settings:
   # Scoped shim (plugins/stage_scoped.py): delegates to Switchyard stage
-  # routing only for the configured pair(s); every other model group
+  # routing only for the configured pairs (`os.environ/SWITCHYARD_GROUP`, plus
+  # `os.environ/SWITCHYARD_GROUP_N` for N>=2); every other model group
   # (including GUI/DB-added models) passes through untouched.
   plugins:
     - stage_scoped.PLUGIN

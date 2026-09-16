@@ -91,9 +91,9 @@ def _guardrail_info(row: dict | None) -> dict | None:
     return info if isinstance(info, dict) else None
 
 
-def _chat(proxy_url, master_key, messages, guardrail=True, extra_headers=None):
+def _chat(proxy_url, master_key, messages, guardrail=True, extra_headers=None, model="switchyard"):
     payload: dict = {
-        "model": "switchyard",
+        "model": model,
         "messages": messages,
         "max_tokens": 256,
     }
@@ -115,7 +115,7 @@ def test_headroom_sidecar_healthy():
 
 
 def test_baseline_without_guardrail_has_no_applied_header(
-    proxy_url, master_key, expected_pair
+    proxy_url, master_key, expected_pair, expected_group
 ):
     """Control: no opt-in means no compression header, routing still in-pair."""
     headers, _ = _chat(
@@ -123,6 +123,7 @@ def test_baseline_without_guardrail_has_no_applied_header(
         master_key,
         [{"role": "user", "content": "Reply with the word hello."}],
         guardrail=False,
+        model=expected_group,
     )
     assert GUARDRAIL not in _applied_guardrails(headers)
     assert _routed_to(headers) in (
@@ -131,15 +132,16 @@ def test_baseline_without_guardrail_has_no_applied_header(
     )
 
 
-def test_guardrail_opt_in_preserves_routing(proxy_url, master_key, expected_pair):
+def test_guardrail_opt_in_preserves_routing(proxy_url, master_key, expected_pair, expected_group):
     """Same prompt + guardrail: tier stays in-pair AND guardrail ran."""
     headers, body = _chat(
         proxy_url,
         master_key,
         [{"role": "user", "content": "Reply with the word hello."}],
         guardrail=True,
+        model=expected_group,
     )
-    assert body["model"] == "switchyard"
+    assert body["model"] == expected_group
     assert _routed_to(headers) in (
         expected_pair["cheap"],
         expected_pair["expensive"],
@@ -150,7 +152,7 @@ def test_guardrail_opt_in_preserves_routing(proxy_url, master_key, expected_pair
 
 
 def test_first_turn_with_guardrail_stays_efficient(
-    proxy_url, master_key, expected_pair
+    proxy_url, master_key, expected_pair, expected_group
 ):
     """efficient_first default holds with compression on (no false escalation)."""
     headers, _ = _chat(
@@ -158,13 +160,14 @@ def test_first_turn_with_guardrail_stays_efficient(
         master_key,
         [{"role": "user", "content": "Reply with the word hello."}],
         guardrail=True,
+        model=expected_group,
     )
     assert _routed_to(headers) == expected_pair["cheap"]
     assert GUARDRAIL in _applied_guardrails(headers)
 
 
 def test_critical_tool_error_with_guardrail_still_escalates(
-    proxy_url, master_key, expected_pair
+    proxy_url, master_key, expected_pair, expected_group
 ):
     """OOM transcript + guardrail must still escalate AND forward x-headers."""
     headers, _ = _chat(
@@ -199,6 +202,7 @@ def test_critical_tool_error_with_guardrail_still_escalates(
         ],
         guardrail=True,
         extra_headers={"x-opencode-session": "pytest-guardrail-escalation"},
+        model=expected_group,
     )
     assert _routed_to(headers) == expected_pair["expensive"], (
         "compression moved the tier decision (or header forwarding broke)"
@@ -206,7 +210,7 @@ def test_critical_tool_error_with_guardrail_still_escalates(
     assert GUARDRAIL in _applied_guardrails(headers)
 
 
-def test_bypass_header_skips_compression(proxy_url, master_key, expected_pair):
+def test_bypass_header_skips_compression(proxy_url, master_key, expected_pair, expected_group):
     """x-headroom-bypass:true skips execution (scheduling header still present).
 
     The applied-guardrails header reflects scheduling, so the effect-level
@@ -219,6 +223,7 @@ def test_bypass_header_skips_compression(proxy_url, master_key, expected_pair):
         [{"role": "user", "content": "Reply with the word hello."}],
         guardrail=True,
         extra_headers={"x-headroom-bypass": "true"},
+        model=expected_group,
     )
     assert _routed_to(headers) in (
         expected_pair["cheap"],
@@ -231,7 +236,7 @@ def test_bypass_header_skips_compression(proxy_url, master_key, expected_pair):
     )
 
 
-def test_large_tool_payload_reports_compression(proxy_url, master_key, expected_pair):
+def test_large_tool_payload_reports_compression(proxy_url, master_key, expected_pair, expected_group):
     """Older 200-row tool exchange compresses; newest exchange goes intact.
 
     LiteLLM holds back the last user/assistant rows and their whole tool
@@ -290,6 +295,7 @@ def test_large_tool_payload_reports_compression(proxy_url, master_key, expected_
             {"role": "user", "content": "Any failures? Quote the FATAL line."},
         ],
         guardrail=True,
+        model=expected_group,
     )
     assert _routed_to(headers) in (
         expected_pair["cheap"],

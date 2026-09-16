@@ -56,6 +56,31 @@ def expected_pair() -> dict[str, str]:
     }
 
 
+@pytest.fixture(scope="session")
+def expected_pair2() -> dict[str, str] | None:
+    """Pair 2 (_N suffix guideline), or None on the single-pair default."""
+    if os.environ.get("LITELLM_CONFIG_FILE", "litellm.yaml") != "litellm.multipair.yaml":
+        return None
+    return {
+        "cheap": PROVIDER_PREFIX + os.environ["CHEAP_MODEL_ID_2"],
+        "expensive": PROVIDER_PREFIX + os.environ["EXPENSIVE_MODEL_ID_2"],
+    }
+
+
+@pytest.fixture(scope="session")
+def expected_group2() -> str | None:
+    """Routed group name for pair 2, or None on the single-pair default."""
+    if os.environ.get("LITELLM_CONFIG_FILE", "litellm.yaml") != "litellm.multipair.yaml":
+        return None
+    return os.environ.get("SWITCHYARD_GROUP_2", "switchyard_2")
+
+
+@pytest.fixture(scope="session")
+def expected_group() -> str:
+    """Routed group name for pair 1 (SWITCHYARD_GROUP, default switchyard)."""
+    return os.environ.get("SWITCHYARD_GROUP", "switchyard")
+
+
 def api_get(url: str, key: str) -> tuple[int, dict, object]:
     req = urllib.request.Request(
         url, headers={"Authorization": f"Bearer {key}"}, method="GET"
