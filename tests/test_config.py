@@ -29,6 +29,34 @@ def test_litellm_yaml_has_exactly_two_ordered_switchyard_deployments():
         assert params["api_key"].startswith("os.environ/")
 
 
+def test_direct_groups_mirror_their_routed_tier():
+    """Direct groups are named by the backend ID itself
+    (`model_name == litellm_params.model`, both env-owned) with exactly one
+    deployment each: single-candidate pools, so the shim passes them through.
+    Params must not drift from the routed counterparts."""
+    with open(REPO_ROOT / "profiles" / "stage" / "litellm.yaml") as fh:
+        config = yaml.safe_load(fh)
+    pair = {
+        "os.environ/EXPENSIVE_MODEL",
+        "os.environ/CHEAP_MODEL",
+    }
+    for env_ref, routed in (
+        ("os.environ/EXPENSIVE_MODEL", 0),
+        ("os.environ/CHEAP_MODEL", 1),
+    ):
+        direct = _deployments_of(config, env_ref)
+        assert len(direct) == 1, f"{env_ref} must stay a single deployment"
+        assert direct[0]["litellm_params"]["model"] == env_ref
+        assert direct[0]["litellm_params"]["model"] in pair
+        routed_deployment = _deployments_of(config, "switchyard")[routed]
+        assert direct[0]["litellm_params"] == routed_deployment["litellm_params"], (
+            f"{env_ref} params drifted from its routed tier"
+        )
+        assert direct[0].get("model_info", {}) == routed_deployment.get(
+            "model_info", {}
+        )
+
+
 def test_tier_metadata_and_reasoning_wiring():
     """Both tiers expose the same surface: effort defaults from env (via
     extra_body: LiteLLM rejects the bare reasoning_effort param for
@@ -139,13 +167,16 @@ def test_litellm_yaml_registers_routing_plugin_and_callback():
     assert config["general_settings"]["store_model_in_db"] is True
 
 
-def test_litellm_yaml_forwards_client_headers_for_switchyard_group():
+def test_client_header_forwarding_is_global():
+    """x-* forwarding must be global (general_settings), not per-group:
+    group names are env-valued and LiteLLM never interpolates os.environ/
+    inside string lists, so a per-group list silently matches nothing."""
     with open(REPO_ROOT / "profiles" / "stage" / "litellm.yaml") as fh:
         config = yaml.safe_load(fh)
-    groups = config["litellm_settings"]["model_group_settings"][
-        "forward_client_headers_to_llm_api"
-    ]
-    assert groups == ["switchyard"]
+    assert (
+        config["general_settings"].get("forward_client_headers_to_llm_api") is True
+    )
+    assert "model_group_settings" not in config.get("litellm_settings", {})
 
 
 def test_switchyard_toml_stage_policy():

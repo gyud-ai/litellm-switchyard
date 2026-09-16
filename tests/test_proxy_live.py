@@ -25,10 +25,13 @@ def test_liveliness(proxy_url):
     assert status == 200
 
 
-def test_models_lists_switchyard_group(proxy_url, master_key):
+def test_models_lists_all_groups(proxy_url, master_key, expected_pair):
     status, _, body = api_get(f"{proxy_url}/v1/models", master_key)
     assert status == 200
-    assert "switchyard" in [m["id"] for m in body["data"]]
+    ids = [m["id"] for m in body["data"]]
+    assert {"switchyard", expected_pair["cheap"], expected_pair["expensive"]} <= set(
+        ids
+    ), ids
 
 
 def test_chat_round_trip_reports_selected_model(proxy_url, master_key, expected_pair):
@@ -98,6 +101,43 @@ def test_critical_tool_error_escalates_with_forwarded_session_header(
     assert routed == expected_pair["expensive"], (
         f"critical tool error did not escalate, routed to {routed!r}"
     )
+
+
+def test_direct_cheap_route_hits_cheap_tier(proxy_url, master_key, expected_pair):
+    """Single-deployment group named by the backend ID bypasses stage routing."""
+    status, headers, body = api_post(
+        f"{proxy_url}/v1/chat/completions",
+        master_key,
+        {
+            "model": expected_pair["cheap"],
+            "messages": [{"role": "user", "content": "Reply with the word hello."}],
+            "max_tokens": 256,
+        },
+    )
+    assert status == 200, body
+    assert body["model"] == expected_pair["cheap"]
+    assert _routed_to(headers) == expected_pair["cheap"]
+
+
+def test_direct_expensive_route_hits_expensive_tier(
+    proxy_url, master_key, expected_pair
+):
+    """Single-deployment group named by the backend ID bypasses stage routing;
+    the plain session header must still reach the backend (forwarding covers
+    all groups). Spends one expensive-tier call."""
+    status, headers, body = api_post(
+        f"{proxy_url}/v1/chat/completions",
+        master_key,
+        {
+            "model": expected_pair["expensive"],
+            "messages": [{"role": "user", "content": "Reply with the word hello."}],
+            "max_tokens": 256,
+        },
+        extra_request_headers={"x-opencode-session": "pytest-direct-probe"},
+    )
+    assert status == 200, body
+    assert body["model"] == expected_pair["expensive"]
+    assert _routed_to(headers) == expected_pair["expensive"]
 
 
 def test_first_turn_without_tool_history_stays_efficient(

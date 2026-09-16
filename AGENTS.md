@@ -37,15 +37,21 @@ strings), **tier** (capable = expensive, efficient = cheap), **group** (the
    and only inside mappings — never inside string lists. The `openai/`
    prefix is therefore composed in `compose.yaml`
    (`CHEAP_MODEL` / `EXPENSIVE_MODEL`); the shim matches on those same vars.
-   Keep the three in sync.
+   Keep the three in sync. For the same reason, header forwarding is global
+   (`general_settings`), not per-group: env-valued group names in a
+   forwarding list would silently never match.
 2b. Env values arrive as strings: numbers (`timeout`, token limits) coerce
    fine, but booleans do not — `model_info` is a plain TypedDict with no
    Pydantic coercion, so the string `"false"` is truthy. Capability flags
    (`supports_*`) stay literal booleans in YAML; only Pydantic-validated
    paths (e.g. guardrail `default_on`) can take bools from env.
-3. The shim passes non-pair groups through untouched and only warns (in
-   container logs) on partial overlap — a mis-edited group degrades to plain
-   routing instead of erroring, so check logs when routing looks off.
+3. The shim stage-routes only the exact pair; single-candidate groups
+   (the backend-ID direct groups, or any one-deployment group) pass
+   silently, and
+   only multi-candidate non-pair pools warn in container logs — a mis-edited
+   group degrades to plain routing instead of erroring, so check logs when
+   routing looks off. Never build a second two-deployment group reusing both
+   pair IDs: it would be stage-routed (roles follow its declaration order).
 4. Guardrail runs *after* routing: Switchyard scores pristine client
    messages; compression never rewrites stored history. `HEADROOM_DEFAULT_ON`
    must be exactly `true`/`false`, never empty (proxy fails startup on empty).

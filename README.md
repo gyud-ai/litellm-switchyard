@@ -83,7 +83,7 @@ Changing models, keys, or endpoints later = edit `.env`, `docker compose up -d`.
 
 ### Tiers and routing policy
 
-`litellm.yaml` declares exactly **two** deployments under one `switchyard` group, and **order is the capable/efficient contract** (capable first, efficient second — LiteLLM 1.97 preserves declaration order and Switchyard relies on it). `switchyard.toml` holds only policy, no model IDs:
+`litellm.yaml` declares exactly **two** deployments under one `switchyard` group, and **order is the capable/efficient contract** (capable first, efficient second — LiteLLM 1.97 preserves declaration order and Switchyard relies on it). `switchyard.toml` holds only policy, no model IDs. Two single-deployment groups named by the backend IDs themselves (`os.environ/CHEAP_MODEL`, `os.environ/EXPENSIVE_MODEL`) address each tier directly and bypass routing entirely (the shim only fires on the exact pair) — use them for debugging, per-tier evals, or clients that want a fixed tier. Never give a direct group both pair IDs.
 
 ```toml
 algorithm = "stage"
@@ -125,7 +125,7 @@ Latency notes: expect prefill/TTFT wins on long contexts on both tiers (fewer pr
 
 ### Client headers
 
-LiteLLM strips unknown request headers by default. `litellm.yaml` enables `forward_client_headers_to_llm_api` for the `switchyard` group only, so any `x-*` header (e.g. `x-session-id`, required by some backends) passes straight to the provider — no `extra_headers` body workaround needed. `Authorization` is never forwarded by this mechanism.
+LiteLLM strips unknown request headers by default. `litellm.yaml` enables `forward_client_headers_to_llm_api` for the `switchyard` group only, so any `x-*` header (e.g. `x-session-id`, required by some backends) passes straight to the provider — no `extra_headers` body workaround needed. Forwarding is global across groups (per-group lists can't hold env-valued group names — LiteLLM never interpolates inside string lists). `Authorization` is never forwarded by this mechanism.
 
 ### Auth, database, Admin UI
 
@@ -150,7 +150,7 @@ Static checks pin the deployment order/count, plugin registration, TOML policy, 
 - `P1013: invalid port number in database URL` → `POSTGRES_PASSWORD` has URL-breaking characters; switch to `A-Za-z0-9_-` and `down -v` + `up`.
 - `model=openai/os.environ/...` in logs / cost-map warnings → LiteLLM only interpolates values that *start with* `os.environ/`; the `openai/` prefix lives in `compose.yaml`, keep it that way.
 - Backend 400 about a missing session/routing header → send it as a plain HTTP header (forwarded for the `switchyard` group) or check the backend's own requirements.
-- `Switchyard scope: candidate pool ... overlaps` warning → the `switchyard` group was edited (usually via UI) into something that isn't the exact pair; restore two deployments, capable first.
+- `Switchyard scope: candidate pool ...` warning → a multi-deployment group stopped matching the pair (usually a UI edit to `switchyard`); restore two deployments, capable first. Single-deployment groups never warn.
 - Headroom `/v1/compress` 404 from LiteLLM → sidecar missing `HEADROOM_COMPRESS_ALLOW_REMOTE=1` (remote callers get 404, not 403, by design).
 - Guardrail `guardrail_response.tokens_saved` stays 0 → either the sidecar is missing `HEADROOM_COMPRESS_USER_MESSAGES=1`, or the payload was all live-turn (newest exchange is held back by design — needs older history to compress). Single-turn hello compressing to 0 is expected.
 - No `x-litellm-applied-guardrails` header → one of three things: request didn't opt in (`HEADROOM_DEFAULT_ON=false` needs per-request `guardrails` / per-key attach), there was nothing compressible (fully-protected short turns return early *without* the header even when scheduled), or bypass was sent. The header proves scheduling only; a present header with bypass sent or sidecar down means *no* compression happened — check `guardrail_information` in the spend log.
