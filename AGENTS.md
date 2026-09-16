@@ -11,10 +11,13 @@ process.
 - `compose.yaml` — services `litellm` + `db` (postgres) + `headroom`
   (compression sidecar). Env comes from `.env` (gitignored; copy
   `.env.example`).
-- `profiles/stage/` — the only profile: `litellm.yaml` (model inventory,
-  plugin + guardrail wiring) and `switchyard.toml` (routing policy).
+- `profiles/stage/` — the only profile: `litellm.yaml` (default single-pair
+  inventory), `litellm.multipair.yaml` (two-pair variant, with
+  `.env.multipair` via `LITELLM_CONFIG_FILE`), `switchyard.toml` (routing
+  policy, shared by all pairs). `.env.multipair` is the two-pair env example.
 - `plugins/stage_scoped.py` — shim registered as the router plugin; delegates
-  to the upstream TOML-built plugin only for the configured pair.
+  to the upstream TOML-built plugin only for the configured pairs (pair 1
+  required, N>=2 discovered from `*_MODEL_N`, unset pairs skipped).
 - `Dockerfile` / `Dockerfile.headroom` — image builds (Switchyard wheel /
   headroom-ai pin). Pushing to `main` triggers `publish.yml`, which pushes
   version-pinned tags to GHCR; `compose.yaml` pulls those by default
@@ -24,19 +27,21 @@ process.
   `test_headroom_guardrail.py`) checks; `tests/conftest.py` loads `.env`.
 
 Vocabulary used everywhere here: the **pair** (cheap + expensive model
-strings), **tier** (capable = expensive, efficient = cheap), **group** (the
-`switchyard` model group), **shim** (`stage_scoped.py`).
+strings, `_N` suffix for N>=2), **tier** (capable = expensive, efficient = cheap), **group** (the
+`SWITCHYARD_GROUP` routed group defaulting to `switchyard`, plus
+`SWITCHYARD_GROUP_N` defaulting to `switchyard_N` for N>=2), **shim**
+(`stage_scoped.py`).
 
 ## Contracts (break these and routing fails silently or loudly)
 
-1. The pair is identified by exact model strings, and tier roles come from
+1. Each pair is identified by exact model strings, and tier roles come from
    declaration order in `litellm.yaml`: capable first, efficient second.
    Same model on several endpoints must reuse the identical string and differ
    only via `api_base`.
 2. LiteLLM interpolates only config values that *start with* `os.environ/`,
    and only inside mappings — never inside string lists. The `openai/`
    prefix is therefore composed in `compose.yaml`
-   (`CHEAP_MODEL` / `EXPENSIVE_MODEL`); the shim matches on those same vars.
+   (`CHEAP_MODEL[_N]` / `EXPENSIVE_MODEL[_N]`); the shim matches on those same vars.
    Keep the three in sync. For the same reason, header forwarding is global
    (`general_settings`), not per-group: env-valued group names in a
    forwarding list would silently never match.
@@ -45,7 +50,7 @@ strings), **tier** (capable = expensive, efficient = cheap), **group** (the
    Pydantic coercion, so the string `"false"` is truthy. Capability flags
    (`supports_*`) stay literal booleans in YAML; only Pydantic-validated
    paths (e.g. guardrail `default_on`) can take bools from env.
-3. The shim stage-routes only the exact pair; single-candidate groups
+3. The shim stage-routes only exact pairs; single-candidate groups
    (the backend-ID direct groups, or any one-deployment group) pass
    silently, and
    only multi-candidate non-pair pools warn in container logs — a mis-edited
@@ -72,6 +77,10 @@ Done = the stated check passes.
 - **Rewire models/keys/endpoints:** edit `.env` only, then
   `docker compose up -d`. Done = `x-litellm-model-name` on a test request
   names the new backend.
+- **Enable the second pair:** `cp .env.multipair .env` (fill backends),
+  `docker compose up -d`. Done = both groups in `/v1/models` + full suite
+  green. N=3+ also needs matching `_3` blocks in `compose.yaml` and
+  `litellm.multipair.yaml` (see the `.env.multipair` note).
 - **Tune routing:** edit `profiles/stage/switchyard.toml`, then
   `docker compose restart litellm`. Done = proxy healthy + full suite green.
 - **Toggle compression default:** set `HEADROOM_DEFAULT_ON` true/false in

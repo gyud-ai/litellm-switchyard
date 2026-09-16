@@ -25,27 +25,39 @@ def test_liveliness(proxy_url):
     assert status == 200
 
 
-def test_models_lists_all_groups(proxy_url, master_key, expected_pair):
+def test_models_lists_all_groups(
+    proxy_url, master_key, expected_pair, expected_pair2, expected_group, expected_group2
+):
     status, _, body = api_get(f"{proxy_url}/v1/models", master_key)
     assert status == 200
     ids = [m["id"] for m in body["data"]]
-    assert {"switchyard", expected_pair["cheap"], expected_pair["expensive"]} <= set(
-        ids
-    ), ids
+    assert {
+        expected_group,
+        expected_pair["cheap"],
+        expected_pair["expensive"],
+    } <= set(ids), ids
+    if expected_group2 is not None and expected_pair2 is not None:
+        assert {
+            expected_group2,
+            expected_pair2["cheap"],
+            expected_pair2["expensive"],
+        } <= set(ids), ids
 
 
-def test_chat_round_trip_reports_selected_model(proxy_url, master_key, expected_pair):
+def test_chat_round_trip_reports_selected_model(
+    proxy_url, master_key, expected_pair, expected_group
+):
     status, headers, body = api_post(
         f"{proxy_url}/v1/chat/completions",
         master_key,
         {
-            "model": "switchyard",
+            "model": expected_group,
             "messages": [{"role": "user", "content": "Reply with the word hello."}],
             "max_tokens": 256,
         },
     )
     assert status == 200, body
-    assert body["model"] == "switchyard"
+    assert body["model"] == expected_group
     assert body["choices"], "no choices returned"
     assert body["choices"][0]["message"]["content"], "empty reply content"
     routed = _routed_to(headers)
@@ -55,7 +67,7 @@ def test_chat_round_trip_reports_selected_model(proxy_url, master_key, expected_
 
 
 def test_critical_tool_error_escalates_with_forwarded_session_header(
-    proxy_url, master_key, expected_pair
+    proxy_url, master_key, expected_pair, expected_group
 ):
     """OOM tool transcript must escalate to the expensive tier, and the plain
     x-opencode-session HTTP header must reach the backend (200, not the
@@ -64,7 +76,7 @@ def test_critical_tool_error_escalates_with_forwarded_session_header(
         f"{proxy_url}/v1/chat/completions",
         master_key,
         {
-            "model": "switchyard",
+            "model": expected_group,
             "max_tokens": 3000,
             "messages": [
                 {"role": "user", "content": "Train the model on the full dataset."},
@@ -141,14 +153,14 @@ def test_direct_expensive_route_hits_expensive_tier(
 
 
 def test_first_turn_without_tool_history_stays_efficient(
-    proxy_url, master_key, expected_pair
+    proxy_url, master_key, expected_pair, expected_group
 ):
     """efficient_first default: a clean first turn must not escalate."""
     status, headers, body = api_post(
         f"{proxy_url}/v1/chat/completions",
         master_key,
         {
-            "model": "switchyard",
+            "model": expected_group,
             "messages": [{"role": "user", "content": "Reply with the word hello."}],
             "max_tokens": 256,
         },

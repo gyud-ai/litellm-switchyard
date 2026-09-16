@@ -8,6 +8,31 @@ The version lives in `pyproject.toml` (`[project] version`).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-16
+
+### Added
+
+- Two-pair variant: `profiles/stage/litellm.multipair.yaml` + `.env.multipair`
+  (selected via `LITELLM_CONFIG_FILE`), with the second pair following the
+  `_2` suffix guideline (`SWITCHYARD_GROUP_2` defaulting to `switchyard_2`).
+  The shim stage-routes any configured pair (N-scalable discovery, unset
+  pairs skipped); all pairs share one `switchyard.toml` policy.
+- Pair-1 group name settable via `SWITCHYARD_GROUP` (default `switchyard`).
+- Static sync checks: the multipair variant's pair-1 blocks must equal the
+  default file, and every yaml `os.environ/` ref must resolve via
+  `compose.yaml` and the matching example env file.
+
+### Changed
+
+- Default inventory is single-pair again (`litellm.yaml` + `.env.example`);
+  pair-2 backend vars are optional (empty default) so the default `.env`
+  boots without them.
+
+### Fixed
+
+- `compose.yaml` now exports `*_MAX_OUTPUT_TOKENS[_2]` (previously only
+  referenced by the yaml/examples, never passed to the proxy).
+
 ## [0.1.1] - 2026-09-15
 
 ### Added
@@ -52,6 +77,7 @@ plus opt-in Headroom prompt compression.
   (`1bfe2bb`, `6f76e67`).
 - Apache-2.0 license, quickstart and setup docs.
 
-[Unreleased]: https://github.com/gyud-ai/litellm-switchyard/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/gyud-ai/litellm-switchyard/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/gyud-ai/litellm-switchyard/compare/v0.1.1...v0.3.0
 [0.1.1]: https://github.com/gyud-ai/litellm-switchyard/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/gyud-ai/litellm-switchyard/releases/tag/v0.1.0

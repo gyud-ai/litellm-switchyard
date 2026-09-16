@@ -27,12 +27,12 @@ def _routed_to(headers: dict) -> str | None:
     return None
 
 
-def _chat(proxy_url, master_key, messages, tools):
+def _chat(proxy_url, master_key, messages, tools, model="switchyard"):
     status, headers, body = api_post(
         f"{proxy_url}/v1/chat/completions",
         master_key,
         {
-            "model": "switchyard",
+            "model": model,
             "messages": messages,
             "tools": tools,
             "tool_choice": "auto",
@@ -43,12 +43,14 @@ def _chat(proxy_url, master_key, messages, tools):
     return headers, body
 
 
-def _run_tool_loop(proxy_url, master_key, expected_pair, messages, tools, runtime):
+def _run_tool_loop(
+    proxy_url, master_key, expected_pair, messages, tools, runtime, model="switchyard"
+):
     """Drive turns until the model stops calling tools. Returns transcript info."""
     tiers = []
     calls_executed = 0
     for _ in range(MAX_TURNS):
-        headers, body = _chat(proxy_url, master_key, messages, tools)
+        headers, body = _chat(proxy_url, master_key, messages, tools, model=model)
         tier = _routed_to(headers)
         assert tier in (expected_pair["cheap"], expected_pair["expensive"]), (
             f"turn routed outside the switchyard pair: {tier!r}"
@@ -83,7 +85,7 @@ def _run_tool_loop(proxy_url, master_key, expected_pair, messages, tools, runtim
     )
 
 
-def test_echo_tool_round_trip(proxy_url, master_key, expected_pair):
+def test_echo_tool_round_trip(proxy_url, master_key, expected_pair, expected_group):
     """Simplest tool use: one call, one result, final answer."""
     tools = [
         {
@@ -112,6 +114,7 @@ def test_echo_tool_round_trip(proxy_url, master_key, expected_pair):
         ],
         tools=tools,
         runtime={"echo": lambda text: text},
+        model=expected_group,
     )
     assert outcome["calls_executed"] == 1
     first_call = outcome["transcript"][1]["tool_calls"][0]
@@ -122,7 +125,7 @@ def test_echo_tool_round_trip(proxy_url, master_key, expected_pair):
     assert outcome["final"], "empty final answer after tool result"
 
 
-def test_multi_step_calculator_task(proxy_url, master_key, expected_pair):
+def test_multi_step_calculator_task(proxy_url, master_key, expected_pair, expected_group):
     """Real-world shape: word problem needing multiply, multiply, then add."""
     tools = [
         {
@@ -165,6 +168,7 @@ def test_multi_step_calculator_task(proxy_url, master_key, expected_pair):
         ],
         tools=tools,
         runtime={"multiply": lambda a, b: a * b, "add": lambda a, b: a + b},
+        model=expected_group,
     )
     assert outcome["calls_executed"] >= 2, (
         f"expected a multi-step solution, only {outcome['calls_executed']} tool call(s)"
