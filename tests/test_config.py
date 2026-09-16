@@ -11,12 +11,15 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
+def _deployments_of(config, group: str) -> list[dict]:
+    return [d for d in config["model_list"] if d["model_name"] == group]
+
+
 def test_litellm_yaml_has_exactly_two_ordered_switchyard_deployments():
     with open(REPO_ROOT / "profiles" / "stage" / "litellm.yaml") as fh:
         config = yaml.safe_load(fh)
-    deployments = config["model_list"]
+    deployments = _deployments_of(config, "switchyard")
     assert len(deployments) == 2, "stage routing requires exactly two deployments"
-    assert {d["model_name"] for d in deployments} == {"switchyard"}
     # Order is the capable/efficient contract: expensive first, cheap second.
     models = [d["litellm_params"]["model"] for d in deployments]
     assert models == ["os.environ/EXPENSIVE_MODEL", "os.environ/CHEAP_MODEL"], models
@@ -24,6 +27,106 @@ def test_litellm_yaml_has_exactly_two_ordered_switchyard_deployments():
         params = deployment["litellm_params"]
         assert params["api_base"].startswith("os.environ/")
         assert params["api_key"].startswith("os.environ/")
+
+
+def test_tier_metadata_and_reasoning_wiring():
+    """Both tiers expose the same surface: effort defaults from env (via
+    extra_body: LiteLLM rejects the bare reasoning_effort param for
+    openai-prefixed custom models) and endpoint-verified model_info.
+    Text-only vision defaults."""
+    with open(REPO_ROOT / "profiles" / "stage" / "litellm.yaml") as fh:
+        config = yaml.safe_load(fh)
+    expensive, cheap = (
+        d["litellm_params"] for d in _deployments_of(config, "switchyard")
+    )
+    assert "reasoning_effort" not in expensive, (
+        "bare reasoning_effort default 400s every request (UnsupportedParamsError)"
+    )
+    assert expensive["extra_body"] == {
+        "reasoning_effort": "os.environ/EXPENSIVE_REASONING_EFFORT"
+    }
+    assert "max_tokens" not in expensive, (
+        "per-request output cap removed by design; max_output_tokens is "
+        "declarative metadata, not an enforced cap"
+    )
+    # Symmetric exposure: cheap carries the same knob (accepted-but-ignored
+    # by the current backend; live if a future cheap backend honors effort).
+    assert cheap["extra_body"] == {
+        "reasoning_effort": "os.environ/CHEAP_REASONING_EFFORT"
+    }
+    assert "max_tokens" not in cheap
+    exp_info, cheap_info = (
+        d.get("model_info", {}) for d in _deployments_of(config, "switchyard")
+    )
+    for flag in (
+        "supports_reasoning",
+        "supports_function_calling",
+        "supports_vision",
+    ):
+        assert exp_info[flag] == cheap_info[flag], (
+            f"{flag} differs across tiers; Switchyard routes mid-conversation, "
+            "so capabilities must match for consistent behavior"
+        )
+    assert exp_info["max_input_tokens"] == "os.environ/EXPENSIVE_MAX_INPUT_TOKENS"
+    assert exp_info["max_output_tokens"] == "os.environ/EXPENSIVE_MAX_OUTPUT_TOKENS"
+    assert exp_info["supports_reasoning"] is True
+    assert exp_info["supports_function_calling"] is True
+    assert exp_info["supports_vision"] is False
+    assert cheap_info["max_input_tokens"] == "os.environ/CHEAP_MAX_INPUT_TOKENS"
+    assert cheap_info["max_output_tokens"] == "os.environ/CHEAP_MAX_OUTPUT_TOKENS"
+    assert cheap_info["supports_reasoning"] is True
+    assert cheap_info["supports_function_calling"] is True
+    assert cheap_info["supports_vision"] is False
+    assert "reasoning_effort" not in cheap
+    for deployment in config["model_list"]:
+        params = deployment["litellm_params"]
+        assert params["timeout"] == (
+            f"os.environ/{'EXPENSIVE' if 'EXPENSIVE' in params['model'] else 'CHEAP'}"
+            "_MODEL_TIMEOUT"
+        ), deployment["model_name"]
+        assert params["max_retries"] == (
+            f"os.environ/{'EXPENSIVE' if 'EXPENSIVE' in params['model'] else 'CHEAP'}"
+            "_MODEL_RETRIES"
+        ), deployment["model_name"]
+    compose = (REPO_ROOT / "compose.yaml").read_text()
+    assert "CHEAP_REASONING_EFFORT: ${CHEAP_REASONING_EFFORT:-low}" in compose
+    assert "EXPENSIVE_REASONING_EFFORT: ${EXPENSIVE_REASONING_EFFORT:-max}" in compose
+    assert "CHEAP_MODEL_TIMEOUT: ${CHEAP_MODEL_TIMEOUT:-300}" in compose
+    assert "CHEAP_MODEL_RETRIES: ${CHEAP_MODEL_RETRIES:-2}" in compose
+    assert "EXPENSIVE_MODEL_TIMEOUT: ${EXPENSIVE_MODEL_TIMEOUT:-300}" in compose
+    assert "EXPENSIVE_MODEL_RETRIES: ${EXPENSIVE_MODEL_RETRIES:-2}" in compose
+    env_example = (REPO_ROOT / ".env.example").read_text()
+    assert "CHEAP_REASONING_EFFORT=low" in env_example
+    assert "EXPENSIVE_REASONING_EFFORT=max" in env_example
+    assert "CHEAP_MAX_INPUT_TOKENS=131072" in env_example
+    assert "EXPENSIVE_MAX_INPUT_TOKENS=1048576" in env_example
+    assert "CHEAP_MAX_TOKENS" not in env_example
+    assert "EXPENSIVE_MAX_TOKENS" not in env_example
+    assert "CHEAP_MAX_OUTPUT_TOKENS=32768" in env_example
+    assert "EXPENSIVE_MAX_OUTPUT_TOKENS=262144" in env_example
+    assert "CHEAP_MODEL_TIMEOUT=300" in env_example
+    assert "CHEAP_MODEL_RETRIES=2" in env_example
+    assert "EXPENSIVE_MODEL_TIMEOUT=300" in env_example
+    assert "EXPENSIVE_MODEL_RETRIES=2" in env_example
+    assert "MODEL_NAME" not in env_example, "dead MODEL_NAME vars must go"
+
+
+def test_model_info_booleans_stay_literal():
+    """Env values arrive as strings and model_info is a plain TypedDict with
+    no Pydantic coercion — the string "false" is truthy. Capability flags
+    must be literal booleans, never os.environ/ refs."""
+    source = (REPO_ROOT / "profiles" / "stage" / "litellm.yaml").read_text()
+    assert "os.environ/SUPPORT" not in source
+    with open(REPO_ROOT / "profiles" / "stage" / "litellm.yaml") as fh:
+        config = yaml.safe_load(fh)
+    for deployment in config["model_list"]:
+        info = deployment.get("model_info", {})
+        for flag in (
+            "supports_reasoning",
+            "supports_function_calling",
+            "supports_vision",
+        ):
+            assert info[flag] is True or info[flag] is False, (deployment, flag)
 
 
 def test_litellm_yaml_registers_routing_plugin_and_callback():

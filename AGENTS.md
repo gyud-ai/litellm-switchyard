@@ -33,10 +33,16 @@ strings), **tier** (capable = expensive, efficient = cheap), **group** (the
    declaration order in `litellm.yaml`: capable first, efficient second.
    Same model on several endpoints must reuse the identical string and differ
    only via `api_base`.
-2. LiteLLM interpolates only config values that *start with* `os.environ/`.
-   The `openai/` prefix is therefore composed in `compose.yaml`
+2. LiteLLM interpolates only config values that *start with* `os.environ/`,
+   and only inside mappings — never inside string lists. The `openai/`
+   prefix is therefore composed in `compose.yaml`
    (`CHEAP_MODEL` / `EXPENSIVE_MODEL`); the shim matches on those same vars.
    Keep the three in sync.
+2b. Env values arrive as strings: numbers (`timeout`, token limits) coerce
+   fine, but booleans do not — `model_info` is a plain TypedDict with no
+   Pydantic coercion, so the string `"false"` is truthy. Capability flags
+   (`supports_*`) stay literal booleans in YAML; only Pydantic-validated
+   paths (e.g. guardrail `default_on`) can take bools from env.
 3. The shim passes non-pair groups through untouched and only warns (in
    container logs) on partial overlap — a mis-edited group degrades to plain
    routing instead of erroring, so check logs when routing looks off.

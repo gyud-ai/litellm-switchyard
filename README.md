@@ -68,6 +68,11 @@ docker compose down -v     # stop and wipe postgres data
 | `LITELLM_PORT` | Host port (default `4000`) |
 | `CHEAP_API_BASE` / `CHEAP_API_KEY` / `CHEAP_MODEL_ID` | Efficient tier endpoint. Bare model ID; compose prepends the `openai/` provider prefix |
 | `EXPENSIVE_API_BASE` / `EXPENSIVE_API_KEY` / `EXPENSIVE_MODEL_ID` | Capable tier endpoint, same format |
+| `CHEAP_REASONING_EFFORT` / `EXPENSIVE_REASONING_EFFORT` | Reasoning depth per tier: `low`, `high`, `max` (defaults `low` / `max`; backend may honor a subset) |
+| `CHEAP_MAX_INPUT_TOKENS` / `EXPENSIVE_MAX_INPUT_TOKENS` | Served context window per tier (defaults `131072` / `1048576`; read from each backend's `/v1/models` where available) |
+| `CHEAP_MAX_OUTPUT_TOKENS` / `EXPENSIVE_MAX_OUTPUT_TOKENS` | Declared per-turn output cap per tier (defaults `32768` / `262144`; verify against your backend — declarative, not enforced server-side) |
+| `CHEAP_MODEL_TIMEOUT` / `EXPENSIVE_MODEL_TIMEOUT` | Per-tier request timeout in seconds (default `300`) |
+| `CHEAP_MODEL_RETRIES` / `EXPENSIVE_MODEL_RETRIES` | Per-tier retry count (default `2`) |
 | `SWITCHYARD_LITELLM_PROFILE` | Profile dir under `profiles/` (default `stage`) |
 | `SWITCHYARD_REF` | Switchyard commit/tag for the Docker builder (default: pinned, tested ref) |
 | `HEADROOM_PORT` | Host loopback port for sidecar health/direct probes (default `8788`, never public) |
@@ -96,7 +101,7 @@ When the capable tier takes over (from the stage-router signal table):
 | Spinning / exploring | repeated failures with no reads/writes, read-only investigation | pushes toward capable |
 | Tests passed + recent writes | green pytest output | pushes back to efficient |
 
-A turn with no tool history takes the picker's default (efficient). Tune via `confidence_threshold` (lower = cheaper, higher = safer) in `profiles/stage/switchyard.toml`, then `docker compose restart litellm`.
+A turn with no tool history takes the picker's default (efficient). Tune via `confidence_threshold` (lower = cheaper, higher = safer) in `profiles/stage/switchyard.toml`, then `docker compose restart litellm`. Each deployment also carries endpoint-verified `model_info` (served context windows, reasoning and tool support — no cost fields, since backends bill their own credits; text-only `supports_vision: false` defaults, flip in YAML per backend). The reasoning depth of each tier is env-owned (`CHEAP_REASONING_EFFORT` default `low`, `EXPENSIVE_REASONING_EFFORT` default `max`) and sent via `extra_body` (LiteLLM rejects the bare param for `openai/`-prefixed custom models); the current cheap backend accepts but ignores it. Override per request with your own `extra_body`, or disable thinking the same way.
 
 ### Multiple endpoints for the same model
 
@@ -120,7 +125,7 @@ Latency notes: expect prefill/TTFT wins on long contexts on both tiers (fewer pr
 
 ### Client headers
 
-LiteLLM strips unknown request headers by default. `litellm.yaml` enables `forward_client_headers_to_llm_api` for the `switchyard` group only, so any `x-*` header (e.g. `x-opencode-session`, required by some backends) passes straight to the provider — no `extra_headers` body workaround needed. `Authorization` is never forwarded by this mechanism.
+LiteLLM strips unknown request headers by default. `litellm.yaml` enables `forward_client_headers_to_llm_api` for the `switchyard` group only, so any `x-*` header (e.g. `x-session-id`, required by some backends) passes straight to the provider — no `extra_headers` body workaround needed. `Authorization` is never forwarded by this mechanism.
 
 ### Auth, database, Admin UI
 
