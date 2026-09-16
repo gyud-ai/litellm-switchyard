@@ -8,6 +8,18 @@ The version lives in `pyproject.toml` (`[project] version`).
 
 ## [Unreleased]
 
+### Added
+
+- Two-endpoint cheap-tier example: `profiles/stage/litellm.multiple.yaml`
+  (the default inventory plus one extra routed cheap deployment reusing every
+  `CHEAP_*` variable except a hardcoded second `api_base`). Both routing
+  layers dedupe by model string, so Switchyard picks the tier and LiteLLM
+  load-balances/fails over across the tier's endpoints. Distinct from the
+  multipair variant (one pair with two cheap endpoints, not two pairs).
+- Static checks (`tests/test_multiple_endpoints.py`) pinning the example's
+  minimal-diff shape, the shim/upstream dedupe contract on the triple pool,
+  plus a live tier-routing test for the extra-endpoint case.
+
 ## [0.3.0] - 2026-09-16
 
 ### Added
