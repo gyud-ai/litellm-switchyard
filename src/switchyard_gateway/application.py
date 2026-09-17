@@ -258,14 +258,25 @@ class Gateway:
             yield chunk
 
     async def finish(self, exchange: Exchange, outcome: str) -> None:
-        """Close an exchange and emit exactly one terminal event."""
+        """Close an exchange and emit exactly one terminal event.
+
+        A close failure must never escape and replace an already-built response,
+        so it is recorded on the event instead. Cancellation still propagates
+        after the terminal event is emitted.
+        """
         if exchange.finished:
             return
         exchange.finished = True
+        failure: BaseException | None = None
         try:
             await exchange.response.close()
-        finally:
-            exchange.event.update(
-                outcome=outcome, total_ms=(self.clock() - exchange.started) * 1000
-            )
-            self.events.emit(exchange.event)
+        except BaseException as error:
+            failure = error
+        if failure is not None:
+            exchange.event["close_failed"] = True
+            if outcome == "completed":
+                outcome = "failed"
+        exchange.event.update(outcome=outcome, total_ms=(self.clock() - exchange.started) * 1000)
+        self.events.emit(exchange.event)
+        if failure is not None and not isinstance(failure, Exception):
+            raise failure

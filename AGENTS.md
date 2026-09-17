@@ -21,9 +21,14 @@ Read README.md for setup, architecture, migration, and verification commands.
   tests and image smoke checks; do not add proxy/all/ML extras.
 - Replica selection and cooldowns stay in application policy. Run one worker.
   Retry only explicitly safe cases, once on another replica, within the selected
-  model. Never replay an ambiguous read failure or a started stream.
+  model. Never replay an ambiguous read failure or a started stream. Cooldowns
+  and round-robin positions are process-local and reset on restart; that
+  single-worker trade-off is intentional and pinned by tests.
 - Close every upstream response, including cancellation before stream iteration.
-  Emit exactly one terminal event for an opened exchange.
+  Emit exactly one terminal event for an opened exchange. A close failure is
+  recorded on the event (`close_failed` with a non-completed outcome) and must
+  not replace an already-built response; cancellation is re-raised after the
+  event is emitted.
 - Logs and errors contain configured public labels and sanitized codes, never
   payloads, credentials, backend URLs, raw headers, or raw dependency exceptions.
 - `.env` and `config.jsonc` stay untracked. Do not touch existing Postgres volumes.

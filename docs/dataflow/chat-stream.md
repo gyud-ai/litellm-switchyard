@@ -112,7 +112,7 @@ When the client disconnects before or during streaming, `sse_body` catches `asyn
 
 _Covers:_ seq 90
 
-`Gateway.__init__` keeps `_positions` and `_cooldowns` as plain in-memory dicts (`application.py:86-87`). They are process-local by design and explicitly single-worker (README, Configuration), so a Uvicorn restart recreates the `Gateway` and forgets every cooldown and rotation position. A backend that was cooled down for an outage is immediately eligible again after restart, and round-robin restarts at the first endpoint; the state is only ever rebuilt by observation. `tests/test_application.py:test_fresh_cooldown_table_keeps_replicas_eligible` documents that a fresh table keeps all replicas eligible.
+`Gateway.__init__` keeps `_positions` and `_cooldowns` as plain in-memory dicts (`application.py:86-87`). This is the accepted single-worker trade-off, now stated in README §Configuration and AGENTS.md: a Uvicorn restart recreates the `Gateway` and forgets every cooldown and rotation position. A backend that was cooled down for an outage is immediately eligible again after restart, and round-robin restarts at the first endpoint; the state is only ever rebuilt by observation. `tests/test_application.py:test_fresh_cooldown_table_keeps_replicas_eligible`, `test_reconstructed_gateway_forgets_cooldowns`, and `test_reconstructed_gateway_resets_round_robin_position` pin the documented behavior.
 
 ## Verification
 
@@ -121,7 +121,7 @@ _Covers:_ seq 90
 - `src/switchyard_gateway/adapters/ingress.py:OwnedStream.__call__` — confirmed the shielded `finally` `gateway.finish`, the `interrupted` default for outcome-less exits, and the `cancelled` label only on `CancelledError`.
 - `src/switchyard_gateway/adapters/ingress.py:_validate` and `_usage` — confirmed every 400 code and the usage allowlist.
 - `src/switchyard_gateway/application.py:Gateway.open` / `_open` / `_select` / `_cooldown` — confirmed routing, `eligible_indices`, compression fail-open, round-robin, bounded failover, cooldown, and the `BaseException` event emit/re-raise.
-- `src/switchyard_gateway/application.py:Gateway.body` / `finish` — confirmed first-body-byte timing, idempotent `finished` guard, close, and exactly-one terminal event.
+- `src/switchyard_gateway/application.py:Gateway.body` / `finish` — confirmed first-body-byte timing, idempotent `finished` guard, close with swallowed-and-recorded close failures (`close_failed`, non-completed outcome), and exactly-one terminal event.
 - `src/switchyard_gateway/adapters/switchyard.py:SwitchyardRouter.route` — confirmed capture-client stage routing and that exactly one request is captured.
 - `src/switchyard_gateway/adapters/headroom.py:HeadroomCompressor.compress` / `_compress` — confirmed executor isolation, fail-open `failed_unknown`, and slot release on thread exit.
 - `src/switchyard_gateway/adapters/httpx.py:HttpxTransport.send` / `HttpxResponse.chunks` / `close` — confirmed streamed POST, header auth, and normalized transport failures.

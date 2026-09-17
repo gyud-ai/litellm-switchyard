@@ -70,9 +70,11 @@ require restart/recreation.
 - `connect_timeout`, `read_timeout`: per-operation seconds. There is no automatic
   replay after an ambiguous timeout or after streaming begins.
 - `cooldown_seconds`: 30 by default. Replica failures respect longer `Retry-After`
-  values. Cooldowns and round-robin positions are process-local; run one worker.
-  `/health/readiness` consults this cooldown table, so it forgets failures across
-  restarts just like routing does.
+  values. Cooldowns and round-robin positions are process-local and reset on
+  restart; run one worker and accept one re-probe of a cooled endpoint and a
+  first-endpoint restart after every deploy or crash. `/health/readiness`
+  consults this cooldown table, so it forgets failures across restarts just like
+  routing does.
 - `forward_headers`: explicit application `x-` headers, initially `x-session-id`
   and `x-opencode-session`. Backend credentials replace gateway authorization.
 
@@ -88,6 +90,10 @@ on a different eligible replica of the same model. Other failures are not retrie
 If no alternative exists, an upstream error status is retained; if no endpoint is
 eligible at selection time, the gateway returns 503. Upstream error bodies are
 replaced with a sanitized error code. Tier selection never changes for failover.
+Cooldown deadlines and rotation positions live only in process memory: a restart
+forgets them, so the first request after a restart can re-probe an endpoint that
+was still cooling down, and round-robin resumes at the first endpoint. This is
+the accepted single-worker trade-off, not a durability guarantee.
 
 ## Client interface
 
@@ -134,7 +140,10 @@ routing/compression/header timings, first upstream body-byte latency, total dura
 compression outcome and token savings, and provider token usage when supplied.
 Body-byte latency is not necessarily first-token latency. Token counts from
 compression are estimates over eligible history; provider usage is reported
-separately. Streams log completed, interrupted, or cancelled outcomes.
+separately. Streams log completed, interrupted, or cancelled outcomes. If
+closing the upstream fails while unwinding, the terminal event records
+`close_failed: true` with a non-completed outcome; an already-built response is
+still returned to the client.
 
 `GET /v1/models` emits one `request` record per call: `outcome:"completed"` with
 status 200 for authorized discovery and `outcome:"rejected"` with status 401 and

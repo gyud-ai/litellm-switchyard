@@ -193,6 +193,16 @@ class TestTimings:
             self.value += 0.001
             return self.value
 
+    class Stepped:
+        """Binary-exact increasing timestamps; exact values pin every scale and sign."""
+
+        def __init__(self) -> None:
+            self.value = 0.0
+
+        def __call__(self) -> float:
+            self.value += 10.0
+            return self.value
+
     async def test_event_timings_are_millisecond_scaled(self, settings, request_body):
         gateway = Gateway(settings, Router(), Compressor(), Transport(), Events(), self.Ticks())
         exchange = await gateway.open(request_body, {}, "req-13")
@@ -210,6 +220,28 @@ class TestTimings:
             value = event[key]
             assert value > 0, key
             assert abs(value - round(value)) < 1e-9, (key, value)
+
+    async def test_success_event_records_exact_millisecond_values(self, settings, request_body):
+        request_body["model"] = "cheap"
+        gateway = Gateway(settings, Router(), Compressor(), Transport(), Events(), self.Stepped())
+        gateway.transport.responses = [Response(chunks=[b"a", b"b"])]
+        exchange = await gateway.open(request_body, {}, "req-14")
+        async for _ in gateway.body(exchange):
+            pass
+        await gateway.finish(exchange, "completed")
+        event = gateway.events.records[-1]
+        assert event["routing_ms"] == 10000.0
+        assert event["compression_ms"] == 10000.0
+        assert event["upstream_headers_ms"] == 20000.0
+        assert event["first_body_byte_ms"] == 30000.0
+        assert event["total_ms"] == 90000.0
+
+    async def test_failure_event_records_exact_millisecond_values(self, settings, request_body):
+        request_body["model"] = "missing"
+        gateway = Gateway(settings, Router(), Compressor(), Transport(), Events(), self.Stepped())
+        with pytest.raises(GatewayError):
+            await gateway.open(request_body, {}, "req-15")
+        assert gateway.events.records[-1]["total_ms"] == 20000.0
 
 
 @contextmanager

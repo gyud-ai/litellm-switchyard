@@ -825,7 +825,7 @@
     {
       "source": "UVICORN",
       "target": "GATEWAY_OPEN",
-      "description": "process restart recreates the Gateway so process-local _positions and _cooldowns are lost",
+      "description": "process restart recreates the Gateway; cooldown deadlines and round-robin positions are process-local and reset by design (documented single-worker trade-off)",
       "seq": 90,
       "kind": "note",
       "outcome": "anomaly",
