@@ -1,0 +1,310 @@
+{
+  "version": 3,
+  "directed": true,
+  "multigraph": true,
+  "graph": {
+    "name": "Model Discovery"
+  },
+  "nodes": [
+    {
+      "id": "CLIENT",
+      "description": "External HTTP caller (operator or OpenAI-compatible client) that sends the discovery request and receives the model list.",
+      "group": 1,
+      "role": "initiator"
+    },
+    {
+      "id": "HTTP_SERVER",
+      "symbol": "uvicorn.run",
+      "description": "Single Uvicorn ASGI worker hosting the FastAPI app; accepts the connection and dispatches the request to the route.",
+      "group": 7,
+      "role": "intermediary"
+    },
+    {
+      "id": "BOOTSTRAP",
+      "symbol": "bootstrap.main",
+      "description": "Composition root that parses CLI arguments, loads configuration, wires the Gateway, and starts the server.",
+      "group": 7,
+      "role": "intermediary"
+    },
+    {
+      "id": "CONFIG_FILE",
+      "description": "The untracked JSONC configuration document (default config.jsonc) that declares model and pair labels.",
+      "group": 7,
+      "role": "intermediary"
+    },
+    {
+      "id": "LOAD_CONFIG",
+      "symbol": "load_config",
+      "description": "Config adapter that parses JSONC, resolves {env:...} references, validates references, and builds Settings.",
+      "group": 4,
+      "role": "intermediary"
+    },
+    {
+      "id": "SETTINGS",
+      "symbol": "Settings",
+      "description": "Frozen gateway-owned Settings dataclass holding the models and pairs mappings consumed by discovery.",
+      "group": 3,
+      "role": "intermediary"
+    },
+    {
+      "id": "GATEWAY",
+      "symbol": "Gateway",
+      "description": "Application-core Gateway object that owns the frozen settings used to answer discovery.",
+      "group": 3,
+      "role": "intermediary"
+    },
+    {
+      "id": "MODELS_ROUTE",
+      "symbol": "create_app.models",
+      "description": "FastAPI GET /v1/models handler that authenticates the caller and serializes the alias list.",
+      "group": 2,
+      "role": "intermediary"
+    },
+    {
+      "id": "AUTHORIZE",
+      "symbol": "create_app.authorize",
+      "description": "Ingress helper that compares the Authorization header to Bearer <api_key> with a constant-time digest.",
+      "group": 2,
+      "role": "intermediary"
+    },
+    {
+      "id": "ERROR_RESPONSE",
+      "symbol": "_error",
+      "description": "Sanitized error response builder used only on the auth-failure branch.",
+      "group": 2,
+      "role": "intermediary"
+    },
+    {
+      "id": "UUID4",
+      "symbol": "uuid.uuid4",
+      "description": "CPython standard-library source of the per-request id returned in the x-request-id header.",
+      "group": 7,
+      "role": "intermediary"
+    },
+    {
+      "id": "EVENT_SINK",
+      "symbol": "JsonEvents",
+      "description": "JSON stdout event sink that the chat route emits to; never invoked by model discovery.",
+      "group": 4,
+      "role": "intermediary"
+    }
+  ],
+  "links": [
+    {
+      "source": "BOOTSTRAP",
+      "target": "LOAD_CONFIG",
+      "description": "main() calls load_config(args.config) at startup",
+      "seq": 1,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "startup"
+    },
+    {
+      "source": "LOAD_CONFIG",
+      "target": "CONFIG_FILE",
+      "description": "path.read_text() reads the JSONC document",
+      "seq": 2,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "startup"
+    },
+    {
+      "source": "CONFIG_FILE",
+      "target": "LOAD_CONFIG",
+      "description": "raw JSONC text",
+      "seq": 3,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "startup"
+    },
+    {
+      "source": "LOAD_CONFIG",
+      "target": "SETTINGS",
+      "description": "Config.model_validate(_resolve(parsed)).settings() constructs Settings",
+      "seq": 4,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "startup"
+    },
+    {
+      "source": "SETTINGS",
+      "target": "LOAD_CONFIG",
+      "description": "validated Settings carrying the pairs and models mappings",
+      "seq": 5,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "startup"
+    },
+    {
+      "source": "LOAD_CONFIG",
+      "target": "BOOTSTRAP",
+      "description": "Settings returned to main()",
+      "seq": 6,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "startup"
+    },
+    {
+      "source": "BOOTSTRAP",
+      "target": "GATEWAY",
+      "description": "Gateway(settings, ...) stores the frozen settings",
+      "seq": 7,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "startup"
+    },
+    {
+      "source": "BOOTSTRAP",
+      "target": "HTTP_SERVER",
+      "description": "uvicorn.run(app, host, port, workers=1, access_log=False) starts one worker",
+      "seq": 8,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "startup"
+    },
+    {
+      "source": "CLIENT",
+      "target": "HTTP_SERVER",
+      "description": "GET /v1/models with Authorization: Bearer <key>",
+      "seq": 10,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "discovery"
+    },
+    {
+      "source": "HTTP_SERVER",
+      "target": "MODELS_ROUTE",
+      "description": "FastAPI routes GET /v1/models to models(request)",
+      "seq": 11,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "discovery"
+    },
+    {
+      "source": "MODELS_ROUTE",
+      "target": "UUID4",
+      "description": "uuid.uuid4().hex generates request_id before authorization",
+      "seq": 12,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "discovery"
+    },
+    {
+      "source": "UUID4",
+      "target": "MODELS_ROUTE",
+      "description": "opaque 32-character request id",
+      "seq": 13,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "discovery"
+    },
+    {
+      "source": "MODELS_ROUTE",
+      "target": "AUTHORIZE",
+      "description": "authorize(request)",
+      "seq": 14,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "discovery"
+    },
+    {
+      "source": "AUTHORIZE",
+      "target": "MODELS_ROUTE",
+      "description": "hmac.compare_digest accepts the Bearer token",
+      "seq": 15,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "discovery"
+    },
+    {
+      "source": "MODELS_ROUTE",
+      "target": "GATEWAY",
+      "description": "read gateway.settings.pairs and gateway.settings.models",
+      "seq": 16,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "discovery"
+    },
+    {
+      "source": "GATEWAY",
+      "target": "SETTINGS",
+      "description": "resolve the frozen settings mappings",
+      "seq": 17,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "discovery"
+    },
+    {
+      "source": "SETTINGS",
+      "target": "GATEWAY",
+      "description": "pair and model alias keys",
+      "seq": 18,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "discovery"
+    },
+    {
+      "source": "GATEWAY",
+      "target": "MODELS_ROUTE",
+      "description": "names = [*pairs, *models] in configuration order",
+      "seq": 19,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "discovery"
+    },
+    {
+      "source": "MODELS_ROUTE",
+      "target": "CLIENT",
+      "description": "200 {object:list, data:[{id, object:model, created:0, owned_by:gateway}]} with x-request-id",
+      "seq": 20,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "discovery"
+    },
+    {
+      "source": "AUTHORIZE",
+      "target": "MODELS_ROUTE",
+      "description": "raises GatewayError('unauthorized', 401)",
+      "seq": 30,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "discovery"
+    },
+    {
+      "source": "MODELS_ROUTE",
+      "target": "ERROR_RESPONSE",
+      "description": "_error(error, request_id)",
+      "seq": 31,
+      "kind": "call",
+      "outcome": "error",
+      "phase": "discovery"
+    },
+    {
+      "source": "ERROR_RESPONSE",
+      "target": "MODELS_ROUTE",
+      "description": "JSONResponse 401 {error:{message:unauthorized, type:gateway_error, code:unauthorized}}",
+      "seq": 32,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "discovery"
+    },
+    {
+      "source": "MODELS_ROUTE",
+      "target": "CLIENT",
+      "description": "401 Unauthorized with x-request-id",
+      "seq": 33,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "discovery"
+    },
+    {
+      "source": "MODELS_ROUTE",
+      "target": "EVENT_SINK",
+      "description": "no events.emit on success or 401, unlike the chat handler which emits a rejected request event",
+      "seq": 40,
+      "kind": "note",
+      "outcome": "anomaly",
+      "phase": "discovery"
+    }
+  ]
+}

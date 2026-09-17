@@ -1,0 +1,839 @@
+{
+  "version": 3,
+  "directed": true,
+  "graph": {
+    "name": "Chat Completion"
+  },
+  "nodes": [
+    {
+      "id": "CLIENT",
+      "symbol": "",
+      "description": "External OpenAI-compatible HTTP caller that posts a non-streaming Chat Completions request and consumes the JSON completion.",
+      "group": 1,
+      "role": "initiator"
+    },
+    {
+      "id": "UVICORN",
+      "symbol": "uvicorn.run",
+      "description": "Single-worker ASGI server and event loop that accepts the socket and drives the FastAPI app.",
+      "group": 7,
+      "role": "intermediary"
+    },
+    {
+      "id": "CHAT_ROUTE",
+      "symbol": "create_app.chat",
+      "description": "FastAPI route handler for POST /v1/chat/completions; owns authentication, body cap, validation, forwarding handoff, the JSON rewrite, and error responses.",
+      "group": 2,
+      "role": "intermediary"
+    },
+    {
+      "id": "AUTHORIZER",
+      "symbol": "create_app.authorize",
+      "description": "Constant-time Bearer API-key check; raises unauthorized on mismatch.",
+      "group": 2,
+      "role": "intermediary"
+    },
+    {
+      "id": "VALIDATOR",
+      "symbol": "_validate",
+      "description": "Validates model, messages, roles, text content, tool calls, and tool results into a Payload.",
+      "group": 2,
+      "role": "intermediary"
+    },
+    {
+      "id": "GATEWAY_OPEN",
+      "symbol": "Gateway.open",
+      "description": "Application orchestration: routes the alias, protects history, compresses, selects a replica, and opens exactly one upstream exchange.",
+      "group": 3,
+      "role": "intermediary"
+    },
+    {
+      "id": "ELIGIBLE_HISTORY",
+      "symbol": "eligible_indices",
+      "description": "Selects compressible older history while protecting instructions, cached rows, and complete live tool exchanges.",
+      "group": 3,
+      "role": "intermediary"
+    },
+    {
+      "id": "ROUTER",
+      "symbol": "SwitchyardRouter.route",
+      "description": "Tier router adapter; normalizes messages, invokes the stage algorithm, and restores original messages.",
+      "group": 4,
+      "role": "intermediary"
+    },
+    {
+      "id": "SWITCHYARD_SDK",
+      "symbol": "algorithms.stage_router",
+      "description": "Pinned switchyard.libsy stage router invoked with capture clients; its synthetic completion never reaches a backend or client.",
+      "group": 5,
+      "role": "intermediary"
+    },
+    {
+      "id": "COMPRESSOR",
+      "symbol": "HeadroomCompressor.compress",
+      "description": "Compression adapter that serializes access to Headroom's shared pipeline through a bounded slot semaphore.",
+      "group": 4,
+      "role": "intermediary"
+    },
+    {
+      "id": "THREAD_POOL",
+      "symbol": "ThreadPoolExecutor",
+      "description": "Single compression execution thread; cancellation does not stop a running thread and the slot is released only when it exits.",
+      "group": 7,
+      "role": "intermediary"
+    },
+    {
+      "id": "HEADROOM_SDK",
+      "symbol": "compress",
+      "description": "Pinned headroom-ai synchronous compressor; ML compression disabled and failures returned as failed_unknown.",
+      "group": 5,
+      "role": "intermediary"
+    },
+    {
+      "id": "TRANSPORT",
+      "symbol": "HttpxTransport.send",
+      "description": "HTTPX-backed transport adapter; opens one upstream request with normalized failures and no hidden retries.",
+      "group": 4,
+      "role": "intermediary"
+    },
+    {
+      "id": "BACKEND",
+      "symbol": "",
+      "description": "External OpenAI-compatible upstream that produces the JSON completion.",
+      "group": 6,
+      "role": "intermediary"
+    },
+    {
+      "id": "HTTPX_RESPONSE",
+      "symbol": "HttpxResponse",
+      "description": "Open upstream response adapter exposing status, headers, chunk iteration, and idempotent close.",
+      "group": 4,
+      "role": "intermediary"
+    },
+    {
+      "id": "GATEWAY_BODY",
+      "symbol": "Gateway.body",
+      "description": "Reads upstream bytes to exhaustion and records first_body_byte_ms on the first non-empty chunk.",
+      "group": 3,
+      "role": "intermediary"
+    },
+    {
+      "id": "GATEWAY_FINISH",
+      "symbol": "Gateway.finish",
+      "description": "Closes the upstream response and emits exactly one terminal request event with the recorded outcome.",
+      "group": 3,
+      "role": "intermediary"
+    },
+    {
+      "id": "EVENTS",
+      "symbol": "JsonEvents.emit",
+      "description": "Sanitized JSON event sink writing one record per line to stdout.",
+      "group": 4,
+      "role": "sink"
+    }
+  ],
+  "links": [
+    {
+      "source": "CLIENT",
+      "target": "UVICORN",
+      "description": "POST /v1/chat/completions without stream (non-streaming) and a Bearer token",
+      "seq": 1,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "ingress"
+    },
+    {
+      "source": "UVICORN",
+      "target": "CHAT_ROUTE",
+      "description": "ASGI dispatch to create_app.chat",
+      "seq": 2,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "ingress"
+    },
+    {
+      "source": "CHAT_ROUTE",
+      "target": "AUTHORIZER",
+      "description": "authorize(request)",
+      "seq": 3,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "ingress"
+    },
+    {
+      "source": "AUTHORIZER",
+      "target": "CHAT_ROUTE",
+      "description": "Bearer accepted",
+      "seq": 4,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "ingress"
+    },
+    {
+      "source": "CHAT_ROUTE",
+      "target": "VALIDATOR",
+      "description": "read capped body, json.loads, _validate",
+      "seq": 5,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "ingress"
+    },
+    {
+      "source": "VALIDATOR",
+      "target": "CHAT_ROUTE",
+      "description": "validated Payload; opened becomes True",
+      "seq": 6,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "ingress"
+    },
+    {
+      "source": "CHAT_ROUTE",
+      "target": "GATEWAY_OPEN",
+      "description": "await gateway.open(payload, dict(request.headers), request_id)",
+      "seq": 7,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "routing"
+    },
+    {
+      "source": "GATEWAY_OPEN",
+      "target": "ROUTER",
+      "description": "router.route(deepcopy(request), pair) for a pair alias",
+      "seq": 8,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "routing"
+    },
+    {
+      "source": "ROUTER",
+      "target": "SWITCHYARD_SDK",
+      "description": "algorithms.stage_router(...).run with capture clients",
+      "seq": 9,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "routing"
+    },
+    {
+      "source": "SWITCHYARD_SDK",
+      "target": "ROUTER",
+      "description": "exactly one captured request; synthetic completion discarded",
+      "seq": 10,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "routing"
+    },
+    {
+      "source": "ROUTER",
+      "target": "GATEWAY_OPEN",
+      "description": "RoutingResult(tier, original messages restored)",
+      "seq": 11,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "routing"
+    },
+    {
+      "source": "GATEWAY_OPEN",
+      "target": "ELIGIBLE_HISTORY",
+      "description": "eligible_indices(prepared messages)",
+      "seq": 12,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "compression"
+    },
+    {
+      "source": "ELIGIBLE_HISTORY",
+      "target": "GATEWAY_OPEN",
+      "description": "compressible old-history indices",
+      "seq": 13,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "compression"
+    },
+    {
+      "source": "GATEWAY_OPEN",
+      "target": "COMPRESSOR",
+      "description": "compressor.compress(deepcopy(original), model)",
+      "seq": 14,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "compression"
+    },
+    {
+      "source": "COMPRESSOR",
+      "target": "THREAD_POOL",
+      "description": "loop.run_in_executor(_compress, ...)",
+      "seq": 15,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "compression"
+    },
+    {
+      "source": "THREAD_POOL",
+      "target": "HEADROOM_SDK",
+      "description": "headroom.compress with CompressConfig(kompress_model=disabled)",
+      "seq": 16,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "compression"
+    },
+    {
+      "source": "HEADROOM_SDK",
+      "target": "THREAD_POOL",
+      "description": "compressed copy or failed_unknown",
+      "seq": 17,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "compression"
+    },
+    {
+      "source": "THREAD_POOL",
+      "target": "COMPRESSOR",
+      "description": "CompressionResult",
+      "seq": 18,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "compression"
+    },
+    {
+      "source": "COMPRESSOR",
+      "target": "GATEWAY_OPEN",
+      "description": "CompressionResult (savings, no_savings, or failed_unknown); _same_structure enforced",
+      "seq": 19,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "compression"
+    },
+    {
+      "source": "GATEWAY_OPEN",
+      "target": "TRANSPORT",
+      "description": "transport.send(endpoint, prepared, forwarded_headers)",
+      "seq": 20,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "upstream-open"
+    },
+    {
+      "source": "TRANSPORT",
+      "target": "BACKEND",
+      "description": "POST {base_url}/chat/completions without streaming",
+      "seq": 21,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "upstream-open"
+    },
+    {
+      "source": "BACKEND",
+      "target": "TRANSPORT",
+      "description": "HTTP 200 JSON completion",
+      "seq": 22,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "upstream-open"
+    },
+    {
+      "source": "TRANSPORT",
+      "target": "GATEWAY_OPEN",
+      "description": "HttpxResponse",
+      "seq": 23,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "upstream-open"
+    },
+    {
+      "source": "GATEWAY_OPEN",
+      "target": "CHAT_ROUTE",
+      "description": "Exchange(response, event, started, upstream_started)",
+      "seq": 24,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "upstream-open"
+    },
+    {
+      "source": "CHAT_ROUTE",
+      "target": "GATEWAY_BODY",
+      "description": "async for chunk in gateway.body(exchange)",
+      "seq": 25,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "body"
+    },
+    {
+      "source": "GATEWAY_BODY",
+      "target": "HTTPX_RESPONSE",
+      "description": "exchange.response.chunks()",
+      "seq": 26,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "body"
+    },
+    {
+      "source": "HTTPX_RESPONSE",
+      "target": "BACKEND",
+      "description": "aiter_bytes read",
+      "seq": 27,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "body"
+    },
+    {
+      "source": "BACKEND",
+      "target": "HTTPX_RESPONSE",
+      "description": "raw upstream JSON bytes",
+      "seq": 28,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "body"
+    },
+    {
+      "source": "HTTPX_RESPONSE",
+      "target": "GATEWAY_BODY",
+      "description": "chunk",
+      "seq": 29,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "body"
+    },
+    {
+      "source": "GATEWAY_BODY",
+      "target": "CHAT_ROUTE",
+      "description": "chunk; first_body_byte_ms recorded on the first non-empty chunk",
+      "seq": 30,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "body"
+    },
+    {
+      "source": "CHAT_ROUTE",
+      "target": "GATEWAY_FINISH",
+      "description": "finish(exchange, \"completed\") in finally (handed_off is False)",
+      "seq": 31,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "finish"
+    },
+    {
+      "source": "GATEWAY_FINISH",
+      "target": "HTTPX_RESPONSE",
+      "description": "exchange.response.close()",
+      "seq": 32,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "finish"
+    },
+    {
+      "source": "HTTPX_RESPONSE",
+      "target": "GATEWAY_FINISH",
+      "description": "response closed",
+      "seq": 33,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "finish"
+    },
+    {
+      "source": "GATEWAY_FINISH",
+      "target": "EVENTS",
+      "description": "terminal request event outcome=completed with status, endpoint, attempts, timings, and usage",
+      "seq": 34,
+      "kind": "event",
+      "outcome": "success",
+      "phase": "finish"
+    },
+    {
+      "source": "GATEWAY_FINISH",
+      "target": "CHAT_ROUTE",
+      "description": "finish returned",
+      "seq": 35,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "finish"
+    },
+    {
+      "source": "CHAT_ROUTE",
+      "target": "UVICORN",
+      "description": "JSONResponse(value): model rewritten to the requested alias, usage captured, x-gateway-model/endpoint headers",
+      "seq": 36,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "response"
+    },
+    {
+      "source": "UVICORN",
+      "target": "CLIENT",
+      "description": "HTTP 200 JSON completion",
+      "seq": 37,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "response"
+    },
+    {
+      "source": "ROUTER",
+      "target": "GATEWAY_OPEN",
+      "description": "GatewayError invalid_routing_request 400, routing_failed or unsupported_routing_rewrite 502, or invalid_routing_result",
+      "seq": 45,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "CHAT_ROUTE",
+      "target": "UVICORN",
+      "description": "sanitized 400/502 gateway error body for the routing failure",
+      "seq": 46,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "UVICORN",
+      "target": "CLIENT",
+      "description": "routing failure status to client",
+      "seq": 47,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "AUTHORIZER",
+      "target": "CHAT_ROUTE",
+      "description": "GatewayError unauthorized 401",
+      "seq": 50,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "CHAT_ROUTE",
+      "target": "UVICORN",
+      "description": "_error() JSONResponse 401",
+      "seq": 51,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "UVICORN",
+      "target": "CLIENT",
+      "description": "401 sanitized gateway error body",
+      "seq": 52,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "VALIDATOR",
+      "target": "CHAT_ROUTE",
+      "description": "GatewayError invalid_request, invalid_stream, invalid_messages, invalid_message, unsupported_message_content, invalid_message_content, invalid_tool_calls, or invalid_tool_result (400)",
+      "seq": 53,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "CHAT_ROUTE",
+      "target": "UVICORN",
+      "description": "GatewayError invalid_json (400) or request_too_large (413)",
+      "seq": 54,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "UVICORN",
+      "target": "CLIENT",
+      "description": "400 or 413 sanitized gateway error body",
+      "seq": 55,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "CHAT_ROUTE",
+      "target": "EVENTS",
+      "description": "rejected request event emitted when exchange is None and opened is False (unauthorized, invalid, or oversized request)",
+      "seq": 56,
+      "kind": "event",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "GATEWAY_OPEN",
+      "target": "CHAT_ROUTE",
+      "description": "GatewayError unknown_model 404",
+      "seq": 57,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "GATEWAY_OPEN",
+      "target": "EVENTS",
+      "description": "failed request event emitted inside Gateway.open with outcome=failed, status, and sanitized code",
+      "seq": 58,
+      "kind": "event",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "CHAT_ROUTE",
+      "target": "UVICORN",
+      "description": "404 sanitized gateway error body",
+      "seq": 59,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "UVICORN",
+      "target": "CLIENT",
+      "description": "404 to client",
+      "seq": 60,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "TRANSPORT",
+      "target": "GATEWAY_OPEN",
+      "description": "ConnectFailure, upstream_timeout 504, or upstream_transport_failed",
+      "seq": 61,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "GATEWAY_OPEN",
+      "target": "EVENTS",
+      "description": "replica_failure event with endpoint and either error=upstream_connect_failed or the retryable status",
+      "seq": 62,
+      "kind": "event",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "GATEWAY_OPEN",
+      "target": "HTTPX_RESPONSE",
+      "description": "await response.close() discards a retryable response before the single alternate attempt",
+      "seq": 63,
+      "kind": "call",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "GATEWAY_OPEN",
+      "target": "EVENTS",
+      "description": "retry event naming the second endpoint of the same model",
+      "seq": 64,
+      "kind": "event",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "GATEWAY_OPEN",
+      "target": "CHAT_ROUTE",
+      "description": "upstream_connect_failed 502 after one failover, or no_available_replica 503 when no replica is eligible",
+      "seq": 65,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "CHAT_ROUTE",
+      "target": "UVICORN",
+      "description": "502, 503, or 504 sanitized gateway error body",
+      "seq": 66,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "UVICORN",
+      "target": "CLIENT",
+      "description": "upstream failure status to client",
+      "seq": 67,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "BACKEND",
+      "target": "TRANSPORT",
+      "description": "non-retryable HTTP >=400 (for example 400 or 401) with no failover",
+      "seq": 68,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "TRANSPORT",
+      "target": "GATEWAY_OPEN",
+      "description": "HttpxResponse carrying status>=400 (or a retryable status with no alternate replica)",
+      "seq": 69,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "GATEWAY_OPEN",
+      "target": "CHAT_ROUTE",
+      "description": "Exchange with response.status>=400 returned rather than raised",
+      "seq": 70,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "CHAT_ROUTE",
+      "target": "UVICORN",
+      "description": "upstream_rejected_request(status); the upstream body is never forwarded",
+      "seq": 71,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "UVICORN",
+      "target": "CLIENT",
+      "description": "upstream status sanitized to the client",
+      "seq": 72,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "CHAT_ROUTE",
+      "target": "GATEWAY_FINISH",
+      "description": "finish(exchange, \"failed\") in finally when handed_off is False",
+      "seq": 73,
+      "kind": "call",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "GATEWAY_FINISH",
+      "target": "EVENTS",
+      "description": "terminal request event with outcome=failed",
+      "seq": 74,
+      "kind": "event",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "HEADROOM_SDK",
+      "target": "THREAD_POOL",
+      "description": "headroom.compress exception or zeroed token counts returned as failed_unknown",
+      "seq": 75,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "COMPRESSOR",
+      "target": "GATEWAY_OPEN",
+      "description": "invalid/failed compression result or changed message structure swallowed by _open; original history preserved, compression=failed_unknown",
+      "seq": 76,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "HTTPX_RESPONSE",
+      "target": "GATEWAY_BODY",
+      "description": "httpx.HTTPError translated to GatewayError upstream_read_failed",
+      "seq": 77,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "CHAT_ROUTE",
+      "target": "UVICORN",
+      "description": "invalid_upstream_response or upstream_response_too_large 502 body",
+      "seq": 78,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "UVICORN",
+      "target": "CLIENT",
+      "description": "502 sanitized gateway error body",
+      "seq": 79,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "CHAT_ROUTE",
+      "target": "UVICORN",
+      "description": "GatewayError request_failed 500 from the unexpected-exception handler",
+      "seq": 80,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "UVICORN",
+      "target": "CLIENT",
+      "description": "500 sanitized gateway error body",
+      "seq": 81,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "CHAT_ROUTE",
+      "target": "EVENTS",
+      "description": "request_failed event emitted when no exchange exists and opened is False",
+      "seq": 82,
+      "kind": "event",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "HTTPX_RESPONSE",
+      "target": "GATEWAY_FINISH",
+      "description": "close() can raise inside finish; finish's finally still emits the terminal event before the exception escapes",
+      "seq": 85,
+      "kind": "return",
+      "outcome": "anomaly",
+      "phase": "anomaly"
+    },
+    {
+      "source": "GATEWAY_FINISH",
+      "target": "EVENTS",
+      "description": "terminal record already says outcome=completed while the client never receives the completion",
+      "seq": 86,
+      "kind": "event",
+      "outcome": "anomaly",
+      "phase": "anomaly"
+    },
+    {
+      "source": "CHAT_ROUTE",
+      "target": "UVICORN",
+      "description": "the exception escaping chat's finally discards the already-built JSONResponse, turning a completed request into an ASGI server error",
+      "seq": 87,
+      "kind": "event",
+      "outcome": "anomaly",
+      "phase": "anomaly"
+    },
+    {
+      "source": "UVICORN",
+      "target": "GATEWAY_OPEN",
+      "description": "process restart recreates the Gateway, dropping process-local _positions and _cooldowns",
+      "seq": 90,
+      "kind": "note",
+      "outcome": "anomaly",
+      "phase": "anomaly"
+    },
+    {
+      "source": "CHAT_ROUTE",
+      "target": "GATEWAY_BODY",
+      "description": "non-streaming branch has no content-type guard like the streaming branch, so a wrong-content-type 200 falls through to JSON parsing and a generic 502",
+      "seq": 91,
+      "kind": "note",
+      "outcome": "anomaly",
+      "phase": "anomaly"
+    }
+  ]
+}

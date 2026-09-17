@@ -1,0 +1,109 @@
+{
+  "version": 3,
+  "directed": true,
+  "multigraph": false,
+  "graph": {
+    "name": "Health Check"
+  },
+  "nodes": [
+    {
+      "id": "CLIENT",
+      "description": "External HTTP caller or operator issuing a liveness/readiness probe: curl, a container healthcheck, or an orchestrator probe. The endpoint is unauthenticated, so no bearer key is required.",
+      "group": 1,
+      "role": "initiator"
+    },
+    {
+      "id": "UVICORN_SERVER",
+      "symbol": "uvicorn.run",
+      "description": "Single-process ASGI HTTP server bound to settings.host:settings.port. Accepts the probe connection and hands the ASGI HTTP scope to the FastAPI app.",
+      "group": 7,
+      "role": "intermediary"
+    },
+    {
+      "id": "FASTAPI_APP",
+      "symbol": "create_app",
+      "description": "FastAPI ASGI application assembled by create_app; matches the request path to a registered route and serializes the handler result to JSON.",
+      "group": 2,
+      "role": "intermediary"
+    },
+    {
+      "id": "HEALTH_ROUTE",
+      "symbol": "health",
+      "description": "Async route handler registered for GET /health/liveliness and GET /health/readiness (both decorators stack on the same function). Returns {\"status\": \"ok\"} unconditionally and consults neither gateway settings nor backends.",
+      "group": 2,
+      "role": "sink"
+    },
+    {
+      "id": "BACKEND_REPLICAS",
+      "symbol": "Endpoint",
+      "description": "Configured backend model replicas (domain.Endpoint) reached in normal chat traffic through the BackendTransport port. Included only to record the readiness probe that is expected but never performed.",
+      "group": 6,
+      "role": "dead-end"
+    }
+  ],
+  "links": [
+    {
+      "source": "CLIENT",
+      "target": "UVICORN_SERVER",
+      "seq": 1,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "probe",
+      "description": "GET /health/liveliness or GET /health/readiness over HTTP; unauthenticated."
+    },
+    {
+      "source": "UVICORN_SERVER",
+      "target": "FASTAPI_APP",
+      "seq": 2,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "probe",
+      "description": "ASGI HTTP scope (method, path) delivered to the app."
+    },
+    {
+      "source": "FASTAPI_APP",
+      "target": "HEALTH_ROUTE",
+      "seq": 3,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "probe",
+      "description": "Route match dispatches to async health(); both health paths map to the same handler."
+    },
+    {
+      "source": "HEALTH_ROUTE",
+      "target": "FASTAPI_APP",
+      "seq": 4,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "probe",
+      "description": "Returns the literal payload {\"status\": \"ok\"}."
+    },
+    {
+      "source": "FASTAPI_APP",
+      "target": "UVICORN_SERVER",
+      "seq": 5,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "probe",
+      "description": "200 response with application/json body."
+    },
+    {
+      "source": "UVICORN_SERVER",
+      "target": "CLIENT",
+      "seq": 6,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "probe",
+      "description": "HTTP 200 with {\"status\": \"ok\"} returned to the caller."
+    },
+    {
+      "source": "HEALTH_ROUTE",
+      "target": "BACKEND_REPLICAS",
+      "seq": 7,
+      "kind": "note",
+      "outcome": "anomaly",
+      "phase": "readiness",
+      "description": "Absent interaction: health() never probes replica reachability, readiness, or configuration, so /health/readiness cannot report a degraded state. Annotated rather than called because no runtime message is ever exchanged."
+    }
+  ]
+}

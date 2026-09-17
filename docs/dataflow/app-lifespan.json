@@ -1,0 +1,540 @@
+{
+  "version": 3,
+  "directed": true,
+  "multigraph": true,
+  "graph": {
+    "name": "Application Lifespan"
+  },
+  "nodes": [
+    {
+      "id": "OPERATOR",
+      "symbol": "main",
+      "description": "CLI process operator: parses arguments, loads and validates configuration, builds the app, and hands it to the single worker HTTP server. Starts the lifecycle and receives its return.",
+      "group": 1,
+      "role": "initiator"
+    },
+    {
+      "id": "UVICORN_SERVER",
+      "symbol": "uvicorn.run",
+      "description": "Single-process ASGI HTTP server and event loop bound to settings.host:settings.port. Drives ASGI lifespan startup before serving and shutdown on termination.",
+      "group": 7,
+      "role": "intermediary"
+    },
+    {
+      "id": "CONFIG",
+      "symbol": "load_config",
+      "description": "JSONC configuration adapter: resolves {\"env\": ...} references and produces validated domain Settings (models, pairs, timeouts, compression workers).",
+      "group": 4,
+      "role": "intermediary"
+    },
+    {
+      "id": "BUILD_APP",
+      "symbol": "build_app",
+      "description": "Composition root. Constructs the httpx client, Headroom compressor, JSON event sink, Switchyard router, HTTPX transport, and Gateway, then wraps them in a FastAPI app with the lifespan.",
+      "group": 4,
+      "role": "intermediary"
+    },
+    {
+      "id": "GATEWAY",
+      "symbol": "Gateway",
+      "description": "Application core orchestrating routing, compression, and forwarding through injected ports. Holds process-local _positions and _cooldowns state that begins empty each start.",
+      "group": 3,
+      "role": "intermediary"
+    },
+    {
+      "id": "HTTP_CLIENT",
+      "symbol": "httpx.AsyncClient",
+      "description": "Pooled async HTTP client shared by the transport. Its lifetime is owned by the composition root and released by client.aclose() on shutdown.",
+      "group": 4,
+      "role": "intermediary"
+    },
+    {
+      "id": "COMPRESSOR",
+      "symbol": "HeadroomCompressor",
+      "description": "Headroom structural compression adapter. Owns one execution thread plus a worker-count semaphore that bounds running and queued submissions.",
+      "group": 4,
+      "role": "intermediary"
+    },
+    {
+      "id": "COMPRESSION_EXECUTOR",
+      "symbol": "ThreadPoolExecutor",
+      "description": "Single worker thread running synchronous Headroom compression off the event loop. Joined by executor.shutdown(wait=True, cancel_futures=True) during close.",
+      "group": 7,
+      "role": "intermediary"
+    },
+    {
+      "id": "EVENTS",
+      "symbol": "JsonEvents",
+      "description": "JSON-lines event sink shared by the app and Gateway; serializes gateway-owned records and never raw payloads or dependency exceptions.",
+      "group": 4,
+      "role": "intermediary"
+    },
+    {
+      "id": "STDOUT",
+      "symbol": "sys.stdout",
+      "description": "Process stdout stream that receives the startup record. The sink of the startup-event branch.",
+      "group": 7,
+      "role": "sink"
+    },
+    {
+      "id": "ROUTER",
+      "symbol": "SwitchyardRouter",
+      "description": "Switchyard stage-routing adapter constructed with the stage policy. Construction only stores the policy; no SDK call happens at boot.",
+      "group": 4,
+      "role": "intermediary"
+    },
+    {
+      "id": "TRANSPORT",
+      "symbol": "HttpxTransport",
+      "description": "Backend transport adapter wrapping the injected pooled client; no connection is opened at construction.",
+      "group": 4,
+      "role": "intermediary"
+    },
+    {
+      "id": "CREATE_APP",
+      "symbol": "create_app",
+      "description": "Ingress factory. Builds the FastAPI application, records the supplied lifespan context manager, and registers the routes.",
+      "group": 2,
+      "role": "intermediary"
+    },
+    {
+      "id": "FASTAPI_APP",
+      "symbol": "FastAPI",
+      "description": "ASGI application returned to uvicorn. On lifespan startup it enters build_app's lifespan context manager; on shutdown it resumes it.",
+      "group": 2,
+      "role": "intermediary"
+    },
+    {
+      "id": "LIFESPAN",
+      "symbol": "lifespan",
+      "description": "Async context manager wrapping the app lifetime: emits a startup event, yields while the server serves, then in finally releases the HTTP client and the compression executor.",
+      "group": 4,
+      "role": "intermediary"
+    }
+  ],
+  "links": [
+    {
+      "source": "OPERATOR",
+      "target": "CONFIG",
+      "seq": 1,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "configuration",
+      "description": "main() calls load_config(args.config) to read and validate the JSONC configuration (bootstrap.py:64)."
+    },
+    {
+      "source": "CONFIG",
+      "target": "OPERATOR",
+      "seq": 2,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "configuration",
+      "description": "Returns validated Settings: models, pairs, timeouts, and compression worker count (config.py:189-197)."
+    },
+    {
+      "source": "OPERATOR",
+      "target": "BUILD_APP",
+      "seq": 3,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "configuration",
+      "description": "main() calls build_app(settings) before handing the app to uvicorn (bootstrap.py:72)."
+    },
+    {
+      "source": "BUILD_APP",
+      "target": "HTTP_CLIENT",
+      "seq": 4,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "construction",
+      "description": "httpx.AsyncClient(timeout=..., follow_redirects=False, trust_env=False) (bootstrap.py:26-30)."
+    },
+    {
+      "source": "HTTP_CLIENT",
+      "target": "BUILD_APP",
+      "seq": 5,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "construction",
+      "description": "Pooled async client instance returned to the composition root."
+    },
+    {
+      "source": "BUILD_APP",
+      "target": "COMPRESSOR",
+      "seq": 6,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "construction",
+      "description": "HeadroomCompressor(settings.compression_workers) (bootstrap.py:31)."
+    },
+    {
+      "source": "COMPRESSOR",
+      "target": "COMPRESSION_EXECUTOR",
+      "seq": 7,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "construction",
+      "description": "ThreadPoolExecutor(max_workers=1, thread_name_prefix='compression') (headroom.py:18)."
+    },
+    {
+      "source": "COMPRESSION_EXECUTOR",
+      "target": "COMPRESSOR",
+      "seq": 8,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "construction",
+      "description": "Executor handle stored as self._executor."
+    },
+    {
+      "source": "COMPRESSOR",
+      "target": "BUILD_APP",
+      "seq": 9,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "construction",
+      "description": "Compressor returned with one execution thread and a Semaphore(workers) (headroom.py:19)."
+    },
+    {
+      "source": "BUILD_APP",
+      "target": "EVENTS",
+      "seq": 10,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "construction",
+      "description": "JsonEvents() bound to sys.stdout (bootstrap.py:32; logging.py:16)."
+    },
+    {
+      "source": "EVENTS",
+      "target": "BUILD_APP",
+      "seq": 11,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "construction",
+      "description": "Event sink returned."
+    },
+    {
+      "source": "BUILD_APP",
+      "target": "ROUTER",
+      "seq": 12,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "construction",
+      "description": "SwitchyardRouter(settings.stage) (bootstrap.py:34)."
+    },
+    {
+      "source": "ROUTER",
+      "target": "BUILD_APP",
+      "seq": 13,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "construction",
+      "description": "Router storing the StagePolicy; no switchyard SDK call at construction (switchyard.py:85-86)."
+    },
+    {
+      "source": "BUILD_APP",
+      "target": "TRANSPORT",
+      "seq": 14,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "construction",
+      "description": "HttpxTransport(client) wrapping the pooled client (bootstrap.py:34)."
+    },
+    {
+      "source": "TRANSPORT",
+      "target": "BUILD_APP",
+      "seq": 15,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "construction",
+      "description": "Transport returned with the injected client stored (httpx.py:43-44)."
+    },
+    {
+      "source": "BUILD_APP",
+      "target": "GATEWAY",
+      "seq": 16,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "construction",
+      "description": "Gateway(settings, router, compressor, transport, events) (bootstrap.py:33-35; application.py:68)."
+    },
+    {
+      "source": "GATEWAY",
+      "target": "BUILD_APP",
+      "seq": 17,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "construction",
+      "description": "Gateway returned holding injected ports and empty _positions/_cooldowns (application.py:80-87)."
+    },
+    {
+      "source": "BUILD_APP",
+      "target": "CREATE_APP",
+      "seq": 18,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "construction",
+      "description": "create_app(gateway, lifespan) (bootstrap.py:48; ingress.py:174)."
+    },
+    {
+      "source": "CREATE_APP",
+      "target": "FASTAPI_APP",
+      "seq": 19,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "construction",
+      "description": "FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan) (ingress.py:179)."
+    },
+    {
+      "source": "FASTAPI_APP",
+      "target": "CREATE_APP",
+      "seq": 20,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "construction",
+      "description": "Configured FastAPI app returned."
+    },
+    {
+      "source": "CREATE_APP",
+      "target": "BUILD_APP",
+      "seq": 21,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "construction",
+      "description": "App returned to the composition root with the lifespan recorded."
+    },
+    {
+      "source": "BUILD_APP",
+      "target": "OPERATOR",
+      "seq": 22,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "construction",
+      "description": "build_app returns the FastAPI app to main."
+    },
+    {
+      "source": "OPERATOR",
+      "target": "UVICORN_SERVER",
+      "seq": 23,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "startup",
+      "description": "uvicorn.run(app, host, port, workers=1, access_log=False, log_config=None) (bootstrap.py:71-78)."
+    },
+    {
+      "source": "UVICORN_SERVER",
+      "target": "FASTAPI_APP",
+      "seq": 24,
+      "kind": "event",
+      "outcome": "success",
+      "phase": "startup",
+      "description": "Server drives ASGI lifespan startup before accepting connections."
+    },
+    {
+      "source": "FASTAPI_APP",
+      "target": "LIFESPAN",
+      "seq": 25,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "startup",
+      "description": "lifespan async context manager entered (bootstrap.py:37-38)."
+    },
+    {
+      "source": "LIFESPAN",
+      "target": "EVENTS",
+      "seq": 26,
+      "kind": "event",
+      "outcome": "success",
+      "phase": "startup",
+      "description": "events.emit({'event': 'startup', 'models': len(settings.models), 'pairs': len(settings.pairs)}) (bootstrap.py:39-41)."
+    },
+    {
+      "source": "EVENTS",
+      "target": "STDOUT",
+      "seq": 27,
+      "kind": "event",
+      "outcome": "success",
+      "phase": "startup",
+      "description": "Writes one timestamped JSON line and flushes (logging.py:18-22)."
+    },
+    {
+      "source": "STDOUT",
+      "target": "EVENTS",
+      "seq": 28,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "startup",
+      "description": "Flush returns; the startup record is written."
+    },
+    {
+      "source": "EVENTS",
+      "target": "LIFESPAN",
+      "seq": 29,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "startup",
+      "description": "emit returns; startup event delivered."
+    },
+    {
+      "source": "LIFESPAN",
+      "target": "FASTAPI_APP",
+      "seq": 30,
+      "kind": "event",
+      "outcome": "success",
+      "phase": "serve",
+      "description": "lifespan yields; startup complete and the server begins serving (bootstrap.py:43)."
+    },
+    {
+      "source": "FASTAPI_APP",
+      "target": "LIFESPAN",
+      "seq": 31,
+      "kind": "event",
+      "outcome": "success",
+      "phase": "shutdown",
+      "description": "On server shutdown the generator is resumed, entering the finally block (bootstrap.py:44)."
+    },
+    {
+      "source": "LIFESPAN",
+      "target": "HTTP_CLIENT",
+      "seq": 32,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "shutdown",
+      "description": "await client.aclose() releases the connection pool (bootstrap.py:45)."
+    },
+    {
+      "source": "HTTP_CLIENT",
+      "target": "LIFESPAN",
+      "seq": 33,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "shutdown",
+      "description": "Client closed; all pooled connections released."
+    },
+    {
+      "source": "LIFESPAN",
+      "target": "COMPRESSOR",
+      "seq": 34,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "shutdown",
+      "description": "await compressor.close() (bootstrap.py:46)."
+    },
+    {
+      "source": "COMPRESSOR",
+      "target": "COMPRESSION_EXECUTOR",
+      "seq": 35,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "shutdown",
+      "description": "asyncio.to_thread(self._executor.shutdown, wait=True, cancel_futures=True) (headroom.py:64-66)."
+    },
+    {
+      "source": "COMPRESSION_EXECUTOR",
+      "target": "COMPRESSOR",
+      "seq": 36,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "shutdown",
+      "description": "Running compression finishes and queued submissions are cancelled."
+    },
+    {
+      "source": "COMPRESSOR",
+      "target": "LIFESPAN",
+      "seq": 37,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "shutdown",
+      "description": "close returns; the execution thread is joined."
+    },
+    {
+      "source": "LIFESPAN",
+      "target": "FASTAPI_APP",
+      "seq": 38,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "shutdown",
+      "description": "lifespan context exits cleanly; resources released."
+    },
+    {
+      "source": "UVICORN_SERVER",
+      "target": "OPERATOR",
+      "seq": 39,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "shutdown",
+      "description": "uvicorn.run returns to main; the process falls through and exits."
+    },
+    {
+      "source": "CONFIG",
+      "target": "OPERATOR",
+      "seq": 40,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "failure",
+      "description": "load_config raises GatewayError('invalid_configuration' or 'missing_configuration_environment', 500) (config.py:181, 189-197)."
+    },
+    {
+      "source": "OPERATOR",
+      "target": "EVENTS",
+      "seq": 41,
+      "kind": "event",
+      "outcome": "error",
+      "phase": "failure",
+      "description": "main emits {'event': 'startup_failed', 'error': error.code} with only the sanitized code (bootstrap.py:65-66)."
+    },
+    {
+      "source": "EVENTS",
+      "target": "STDOUT",
+      "seq": 42,
+      "kind": "event",
+      "outcome": "error",
+      "phase": "failure",
+      "description": "A startup_failed JSON line is written; no private configuration value appears (logging.py:18-22)."
+    },
+    {
+      "source": "OPERATOR",
+      "target": "UVICORN_SERVER",
+      "seq": 43,
+      "kind": "event",
+      "outcome": "error",
+      "phase": "failure",
+      "description": "SystemExit(1); uvicorn.run is never reached and no server is bound (bootstrap.py:67). Also covers the litellm_must_not_be_installed check (bootstrap.py:62-63)."
+    },
+    {
+      "source": "EVENTS",
+      "target": "LIFESPAN",
+      "seq": 44,
+      "kind": "return",
+      "outcome": "anomaly",
+      "phase": "review",
+      "description": "emit raises (stdout write/flush failure) before the try block is entered, so the finally never runs and client.aclose()/compressor.close() are skipped (bootstrap.py:39-46)."
+    },
+    {
+      "source": "LIFESPAN",
+      "target": "COMPRESSOR",
+      "seq": 45,
+      "kind": "call",
+      "outcome": "anomaly",
+      "phase": "review",
+      "description": "Expected close is skipped when the preceding client.aclose() raises; the two awaits share one unguarded finally body (bootstrap.py:45-46)."
+    },
+    {
+      "source": "UVICORN_SERVER",
+      "target": "LIFESPAN",
+      "seq": 46,
+      "kind": "note",
+      "outcome": "anomaly",
+      "phase": "review",
+      "description": "Absent interaction: build_app constructs the client and executor before uvicorn.run owns them, so a bind/start failure aborts the process without ever entering the lifespan and without any shutdown path (bootstrap.py:26-35, 71-78)."
+    },
+    {
+      "source": "LIFESPAN",
+      "target": "EVENTS",
+      "seq": 47,
+      "kind": "note",
+      "outcome": "anomaly",
+      "phase": "review",
+      "description": "Absent interaction: no shutdown/stopped event is emitted on orderly teardown, so startup is observable in JSON logs but shutdown is not (bootstrap.py:39-46)."
+    }
+  ]
+}
