@@ -1,0 +1,128 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:data-flow-graph:schema:3",
+  "title": "Data Flow Graph",
+  "description": "A directed node-link serialization of a request-response data flow, D3-force compatible, self-sufficient for deriving a sequence diagram, a data flow diagram (who drives what), initiation/termination points, and success/error/anomaly paths without consulting external prose. One lifecycle = one graph = one total order; every view over it is a filter, never a join. The minimal D3 contract is nodes[].id and links[].source/target. Referential integrity (every links[].source/target resolves to a nodes[].id), node-id uniqueness, and seq uniqueness are beyond JSON Schema's expressive power and MUST be enforced by validator tooling.",
+  "type": "object",
+  "required": ["nodes", "links"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Contract revision this document was authored under, matching the schema $id revision (currently 3). Authoring skills stamp it on every pair they write. Its absence marks a legacy document from before contract stamping existed: conventions introduced after revision 2 (such as per-element evidence) are not guaranteed to be populated. Diff tools and renderers MUST treat it as optional.",
+      "default": 3
+    },
+    "directed": {
+      "type": "boolean",
+      "description": "Whether links are directional. Data flow graphs are always directional; default true when omitted.",
+      "default": true
+    },
+    "multigraph": {
+      "type": "boolean",
+      "description": "Whether parallel edges between the same ordered node pair may exist. Default false. With seq-ordered edges, revisiting the same pair at different steps is normal (loops, retries); distinct parallel edges are distinguished by seq.",
+      "default": false
+    },
+    "graph": {
+      "type": "object",
+      "description": "Graph-level metadata.",
+      "additionalProperties": true,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Human-readable name of the lifecycle this graph traces, e.g. \"Export Data Flow\"."
+        }
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/node" },
+      "description": "All participants in the lifecycle."
+    },
+    "links": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/link" },
+      "description": "Directed interactions between participants, ordered by seq."
+    }
+  },
+  "definitions": {
+    "node": {
+      "type": "object",
+      "required": ["id"],
+      "additionalProperties": true,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Unique within the graph. Convention: SCREAMING_SNAKE short identifier, e.g. UPLOAD_PAGE."
+        },
+        "symbol": {
+          "type": "string",
+          "description": "Code identifier the node represents: function, class, struct, interface, or type name (e.g. createDocumentFromUpload). The precise anchor in source; prose context belongs in description, file/package paths in location-style tooling."
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description of what the participant is and does."
+        },
+        "group": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Coarse participant category for color-coding; doubles as the swimlane/participant class of a sequence diagram derived from this graph. Values are graph-local conventions defined by the project tracing the flows and MUST be documented alongside the graphs (a legend in the index README). Example convention for a web app + backend service monorepo: 1=Browser/UI, 2=Web-app route boundary, 3=Feature server logic, 4=Cross-service gateway client, 5=Inbound adapter, 6=Service core, 7=External process/vendor, 8=Storage."
+        },
+        "role": {
+          "type": "string",
+          "enum": ["initiator", "intermediary", "sink", "dead-end"],
+          "default": "intermediary",
+          "description": "Position of the participant in the request-response lifecycle. initiator = where the lifecycle begins (user action, external trigger); a well-formed graph has at least one. intermediary = receives and/or forwards work (the unmarked default). sink = legitimate server-side termination where the intended response is delivered. dead-end = termination WITHOUT the intended response — swallowed errors, anomaly termini; must be explained in accompanying documentation. Initiator-wins convention: a node that both starts the lifecycle and receives its return (e.g. the browser) is declared initiator only; termination there is derived from incoming return edges, never declared."
+        }
+      }
+    },
+    "link": {
+      "type": "object",
+      "required": ["source", "target"],
+      "additionalProperties": true,
+      "properties": {
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "description": "ID of the edge's tail node (the driver). MUST match a nodes[].id."
+        },
+        "target": {
+          "type": "string",
+          "minLength": 1,
+          "description": "ID of the edge's head node (the driven). MUST match a nodes[].id."
+        },
+        "value": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Visual weight/stroke-class hint for renderers only; carries no semantics. Legacy field from schema v1 where values 1-4 encoded path classification; superseded by kind+outcome. Renderers MAY derive it from outcome if absent."
+        },
+        "description": {
+          "type": "string",
+          "description": "Short description of the call/event this edge represents; becomes the message text in a derived sequence diagram."
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Position of this interaction in the lifecycle's single total order. Sequence diagrams are derived by sorting links on seq. MUST be unique within the graph; SHOULD be contiguous from 1, but gaps are tolerated so inserting a step does not force renumbering. Interchangeable parallel steps (e.g. DOCX vs PDF branches) may share a value so renderers can fan them side-by-side; steps inside a loop/retry occupy a range that repeats."
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["call", "return", "event", "note"],
+          "default": "call",
+          "description": "Interaction shape for sequence-diagram derivation: call = synchronous request (solid arrow), return = response flowing back (dashed arrow), event = fire-and-forget / async emission such as SSE fan-out or log append (open arrow), note = annotation edge carrying no runtime message (dotted)."
+        },
+        "outcome": {
+          "type": "string",
+          "enum": ["success", "error", "anomaly"],
+          "default": "success",
+          "description": "Path classification: success = happy path, error = handled error/validation-failure path, anomaly = expected-but-absent path or present-but-nonsensical/premature-terminating path (must be explained in accompanying documentation). Error and anomaly subgraphs are extracted by filtering on this field."
+        },
+        "phase": {
+          "type": "string",
+          "description": "Optional, NON-ORDINAL stage label grouping interactions into readable stages (e.g. \"submission\", \"turn-loop\", \"commit\"). Pure filter sugar for humans and renderers; carries no ordering or semantic weight — seq remains the only clock."
+        }
+      }
+    }
+  }
+}

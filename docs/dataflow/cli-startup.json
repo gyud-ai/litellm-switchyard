@@ -1,0 +1,587 @@
+{
+  "version": 3,
+  "directed": true,
+  "multigraph": true,
+  "graph": {
+    "name": "CLI Startup and Worker Launch"
+  },
+  "nodes": [
+    {
+      "id": "OPERATOR",
+      "symbol": "switchyard-gateway",
+      "description": "Operator invoking the console script with --config and optionally --check.",
+      "group": 1,
+      "role": "initiator"
+    },
+    {
+      "id": "MAIN",
+      "symbol": "main",
+      "description": "Composition-root CLI entry point: parses arguments, guards LiteLLM, loads config, starts one Uvicorn worker.",
+      "group": 3,
+      "role": "intermediary"
+    },
+    {
+      "id": "ARG_PARSER",
+      "symbol": "argparse.ArgumentParser",
+      "description": "--config (Path, default config.jsonc) and --check argument parsing.",
+      "group": 3,
+      "role": "intermediary"
+    },
+    {
+      "id": "LITELLM_GUARD",
+      "symbol": "importlib.util.find_spec",
+      "description": "Preflight check that refuses an environment where litellm is importable.",
+      "group": 3,
+      "role": "intermediary"
+    },
+    {
+      "id": "BUILD_APP",
+      "symbol": "build_app",
+      "description": "Wires concrete adapters and returns the FastAPI app together with its lifespan.",
+      "group": 3,
+      "role": "intermediary"
+    },
+    {
+      "id": "GATEWAY",
+      "symbol": "Gateway",
+      "description": "Application orchestration core constructed from settings and injected ports.",
+      "group": 3,
+      "role": "intermediary"
+    },
+    {
+      "id": "LIFESPAN",
+      "symbol": "lifespan",
+      "description": "Async context manager emitting the startup event and closing client/compressor on shutdown.",
+      "group": 3,
+      "role": "intermediary"
+    },
+    {
+      "id": "INGRESS_APP",
+      "symbol": "create_app",
+      "description": "FastAPI ingress app factory that stores the lifespan and route handlers.",
+      "group": 2,
+      "role": "intermediary"
+    },
+    {
+      "id": "LOAD_CONFIG",
+      "symbol": "load_config",
+      "description": "JSONC parse, environment-reference resolution, and pydantic validation into Settings.",
+      "group": 4,
+      "role": "intermediary"
+    },
+    {
+      "id": "JSON_EVENTS",
+      "symbol": "JsonEvents",
+      "description": "One-JSON-record-per-line stdout event sink with UTC timestamps.",
+      "group": 4,
+      "role": "intermediary"
+    },
+    {
+      "id": "SILENCE_LOGS",
+      "symbol": "silence_dependency_logs",
+      "description": "Disables dependency logging process-wide so only gateway JSON events are observable.",
+      "group": 4,
+      "role": "intermediary"
+    },
+    {
+      "id": "HEADROOM",
+      "symbol": "HeadroomCompressor",
+      "description": "Compression adapter that eagerly allocates a single compression worker thread.",
+      "group": 4,
+      "role": "intermediary"
+    },
+    {
+      "id": "SWITCHYARD",
+      "symbol": "SwitchyardRouter",
+      "description": "Tier-routing adapter over the pinned Switchyard SDK.",
+      "group": 4,
+      "role": "intermediary"
+    },
+    {
+      "id": "HTTPX_TRANSPORT",
+      "symbol": "HttpxTransport",
+      "description": "Single-attempt backend transport adapter over the pooled HTTPX client.",
+      "group": 4,
+      "role": "intermediary"
+    },
+    {
+      "id": "HTTPX_CLIENT",
+      "symbol": "httpx.AsyncClient",
+      "description": "Pooled HTTP client constructed in build_app and owned until lifespan shutdown.",
+      "group": 4,
+      "role": "intermediary"
+    },
+    {
+      "id": "SWITCHYARD_SDK",
+      "symbol": "switchyard.libsy.algorithms",
+      "description": "Pinned vendor tier-routing SDK imported by the Switchyard adapter.",
+      "group": 5,
+      "role": "intermediary"
+    },
+    {
+      "id": "HEADROOM_SDK",
+      "symbol": "headroom.compress",
+      "description": "Pinned vendor structural-compression SDK imported by the Headroom adapter.",
+      "group": 5,
+      "role": "intermediary"
+    },
+    {
+      "id": "CONFIG_FILE",
+      "symbol": "config.jsonc",
+      "description": "JSONC configuration document read from disk.",
+      "group": 7,
+      "role": "intermediary"
+    },
+    {
+      "id": "ENV",
+      "symbol": "os.environ",
+      "description": "Process environment holding telemetry switches and JSONC-resolved secrets/backend URLs.",
+      "group": 7,
+      "role": "intermediary"
+    },
+    {
+      "id": "STDOUT",
+      "symbol": "sys.stdout",
+      "description": "JSON event stream consumed by the operator and container log collector.",
+      "group": 7,
+      "role": "sink"
+    },
+    {
+      "id": "STDERR",
+      "symbol": "sys.stderr",
+      "description": "argparse usage output for malformed invocations, which bypasses the JSON event contract.",
+      "group": 7,
+      "role": "dead-end"
+    },
+    {
+      "id": "UVICORN",
+      "symbol": "uvicorn.run",
+      "description": "Single-worker ASGI server that terminates the startup path and owns the event loop.",
+      "group": 7,
+      "role": "sink"
+    },
+    {
+      "id": "THREAD_POOL",
+      "symbol": "ThreadPoolExecutor",
+      "description": "Compression execution thread owned by HeadroomCompressor, allocated at construction time.",
+      "group": 7,
+      "role": "intermediary"
+    }
+  ],
+  "links": [
+    {
+      "source": "OPERATOR",
+      "target": "MAIN",
+      "seq": 1,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "invocation",
+      "description": "Invoke the console script switchyard-gateway with --config and optionally --check"
+    },
+    {
+      "source": "MAIN",
+      "target": "ARG_PARSER",
+      "seq": 2,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "invocation",
+      "description": "Construct ArgumentParser and add --config and --check"
+    },
+    {
+      "source": "ARG_PARSER",
+      "target": "MAIN",
+      "seq": 3,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "invocation",
+      "description": "Namespace(config: Path, check: bool) parsed from argv"
+    },
+    {
+      "source": "MAIN",
+      "target": "SILENCE_LOGS",
+      "seq": 4,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "preflight",
+      "description": "silence_dependency_logs()"
+    },
+    {
+      "source": "MAIN",
+      "target": "ENV",
+      "seq": 5,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "preflight",
+      "description": "Set HEADROOM_BEACON=off, DO_NOT_TRACK=1, HEADROOM_TELEMETRY=off"
+    },
+    {
+      "source": "MAIN",
+      "target": "LITELLM_GUARD",
+      "seq": 6,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "preflight",
+      "description": "find_spec('litellm') must be None"
+    },
+    {
+      "source": "LITELLM_GUARD",
+      "target": "MAIN",
+      "seq": 7,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "preflight",
+      "description": "None: LiteLLM is absent"
+    },
+    {
+      "source": "MAIN",
+      "target": "LOAD_CONFIG",
+      "seq": 8,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "config",
+      "description": "load_config(args.config)"
+    },
+    {
+      "source": "LOAD_CONFIG",
+      "target": "CONFIG_FILE",
+      "seq": 9,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "config",
+      "description": "Path.read_text()"
+    },
+    {
+      "source": "CONFIG_FILE",
+      "target": "LOAD_CONFIG",
+      "seq": 10,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "config",
+      "description": "Raw JSONC text"
+    },
+    {
+      "source": "LOAD_CONFIG",
+      "target": "ENV",
+      "seq": 11,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "config",
+      "description": "_resolve reads {'env': NAME} references"
+    },
+    {
+      "source": "ENV",
+      "target": "LOAD_CONFIG",
+      "seq": 12,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "config",
+      "description": "Referenced variable values"
+    },
+    {
+      "source": "LOAD_CONFIG",
+      "target": "MAIN",
+      "seq": 13,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "config",
+      "description": "Validated Settings via Config.model_validate(...).settings()"
+    },
+    {
+      "source": "MAIN",
+      "target": "JSON_EVENTS",
+      "seq": 14,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "validate-only",
+      "description": "[--check only] emit {'event': 'configuration_valid'}"
+    },
+    {
+      "source": "JSON_EVENTS",
+      "target": "STDOUT",
+      "seq": 15,
+      "kind": "event",
+      "outcome": "success",
+      "phase": "validate-only",
+      "description": "JSON configuration_valid record"
+    },
+    {
+      "source": "MAIN",
+      "target": "OPERATOR",
+      "seq": 16,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "validate-only",
+      "description": "Return without starting the server (exit code 0)"
+    },
+    {
+      "source": "MAIN",
+      "target": "BUILD_APP",
+      "seq": 17,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "composition",
+      "description": "build_app(settings)"
+    },
+    {
+      "source": "BUILD_APP",
+      "target": "HTTPX_CLIENT",
+      "seq": 18,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "composition",
+      "description": "httpx.AsyncClient(timeout, follow_redirects=False, trust_env=False)"
+    },
+    {
+      "source": "HTTPX_CLIENT",
+      "target": "BUILD_APP",
+      "seq": 19,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "composition",
+      "description": "Pooled client"
+    },
+    {
+      "source": "BUILD_APP",
+      "target": "HEADROOM",
+      "seq": 20,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "composition",
+      "description": "HeadroomCompressor(settings.compression_workers)"
+    },
+    {
+      "source": "HEADROOM",
+      "target": "THREAD_POOL",
+      "seq": 21,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "composition",
+      "description": "ThreadPoolExecutor(max_workers=1, thread_name_prefix='compression')"
+    },
+    {
+      "source": "THREAD_POOL",
+      "target": "HEADROOM",
+      "seq": 22,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "composition",
+      "description": "Executor"
+    },
+    {
+      "source": "HEADROOM",
+      "target": "HEADROOM_SDK",
+      "seq": 23,
+      "kind": "note",
+      "outcome": "success",
+      "phase": "composition",
+      "description": "Adapter module imports the pinned headroom compress API"
+    },
+    {
+      "source": "BUILD_APP",
+      "target": "SWITCHYARD",
+      "seq": 24,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "composition",
+      "description": "SwitchyardRouter(settings.stage)"
+    },
+    {
+      "source": "SWITCHYARD",
+      "target": "SWITCHYARD_SDK",
+      "seq": 25,
+      "kind": "note",
+      "outcome": "success",
+      "phase": "composition",
+      "description": "Adapter module imports the pinned switchyard.libsy algorithms"
+    },
+    {
+      "source": "BUILD_APP",
+      "target": "HTTPX_TRANSPORT",
+      "seq": 26,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "composition",
+      "description": "HttpxTransport(client)"
+    },
+    {
+      "source": "HTTPX_TRANSPORT",
+      "target": "BUILD_APP",
+      "seq": 27,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "composition",
+      "description": "Transport"
+    },
+    {
+      "source": "BUILD_APP",
+      "target": "GATEWAY",
+      "seq": 28,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "composition",
+      "description": "Gateway(settings, SwitchyardRouter, HeadroomCompressor, HttpxTransport, JsonEvents)"
+    },
+    {
+      "source": "GATEWAY",
+      "target": "BUILD_APP",
+      "seq": 29,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "composition",
+      "description": "Gateway"
+    },
+    {
+      "source": "BUILD_APP",
+      "target": "INGRESS_APP",
+      "seq": 30,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "composition",
+      "description": "create_app(gateway, lifespan)"
+    },
+    {
+      "source": "INGRESS_APP",
+      "target": "BUILD_APP",
+      "seq": 31,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "composition",
+      "description": "FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)"
+    },
+    {
+      "source": "BUILD_APP",
+      "target": "MAIN",
+      "seq": 32,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "composition",
+      "description": "FastAPI app"
+    },
+    {
+      "source": "MAIN",
+      "target": "UVICORN",
+      "seq": 33,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "serve",
+      "description": "uvicorn.run(app, host, port, workers=1, access_log=False, log_config=None)"
+    },
+    {
+      "source": "UVICORN",
+      "target": "LIFESPAN",
+      "seq": 34,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "serve",
+      "description": "ASGI lifespan startup"
+    },
+    {
+      "source": "LIFESPAN",
+      "target": "JSON_EVENTS",
+      "seq": 35,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "serve",
+      "description": "emit {'event': 'startup', 'models': N, 'pairs': M}"
+    },
+    {
+      "source": "JSON_EVENTS",
+      "target": "STDOUT",
+      "seq": 36,
+      "kind": "event",
+      "outcome": "success",
+      "phase": "serve",
+      "description": "JSON startup record"
+    },
+    {
+      "source": "LIFESPAN",
+      "target": "UVICORN",
+      "seq": 37,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "serve",
+      "description": "Startup complete"
+    },
+    {
+      "source": "UVICORN",
+      "target": "OPERATOR",
+      "seq": 38,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "serve",
+      "description": "Listening on host:port until shutdown"
+    },
+    {
+      "source": "LITELLM_GUARD",
+      "target": "MAIN",
+      "seq": 39,
+      "kind": "event",
+      "outcome": "error",
+      "phase": "failure",
+      "description": "find_spec returns a module spec: LiteLLM is installed"
+    },
+    {
+      "source": "LOAD_CONFIG",
+      "target": "MAIN",
+      "seq": 40,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "failure",
+      "description": "GatewayError invalid_configuration or missing_configuration_environment"
+    },
+    {
+      "source": "MAIN",
+      "target": "JSON_EVENTS",
+      "seq": 41,
+      "kind": "call",
+      "outcome": "error",
+      "phase": "failure",
+      "description": "emit {'event': 'startup_failed', 'error': error.code}"
+    },
+    {
+      "source": "JSON_EVENTS",
+      "target": "STDOUT",
+      "seq": 42,
+      "kind": "event",
+      "outcome": "error",
+      "phase": "failure",
+      "description": "JSON startup_failed record"
+    },
+    {
+      "source": "MAIN",
+      "target": "OPERATOR",
+      "seq": 43,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "failure",
+      "description": "raise SystemExit(1): no server starts"
+    },
+    {
+      "source": "ARG_PARSER",
+      "target": "STDERR",
+      "seq": 44,
+      "kind": "call",
+      "outcome": "anomaly",
+      "phase": "anomaly",
+      "description": "parse_args usage error prints to stderr and exits 2, bypassing the JSON startup_failed event"
+    },
+    {
+      "source": "SILENCE_LOGS",
+      "target": "MAIN",
+      "seq": 45,
+      "kind": "note",
+      "outcome": "anomaly",
+      "phase": "anomaly",
+      "description": "logging.disable(CRITICAL) is process-global and never restored"
+    },
+    {
+      "source": "MAIN",
+      "target": "HTTPX_CLIENT",
+      "seq": 46,
+      "kind": "note",
+      "outcome": "anomaly",
+      "phase": "anomaly",
+      "description": "No finally around uvicorn.run: a start/bind failure skips lifespan client.aclose() and compressor.close()"
+    }
+  ]
+}
