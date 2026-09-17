@@ -5,10 +5,13 @@ import json
 
 import httpx
 import pytest
-from conftest import Response
+from conftest import Compressor, Events, Response, Router, Transport
+from hypothesis import given
+from hypothesis import strategies as st
 
 from switchyard_gateway.adapters.ingress import OwnedStream, create_app
-from switchyard_gateway.domain import GatewayError
+from switchyard_gateway.application import Gateway
+from switchyard_gateway.domain import Endpoint, GatewayError, Model, Pair, Settings
 
 pytestmark = pytest.mark.integration
 
@@ -21,6 +24,21 @@ _INTERRUPTED_FRAME = (
 
 def _data_frames(response: httpx.Response) -> list[str]:
     return [line for line in response.text.splitlines() if line.startswith("data: ")]
+
+
+def _gateway() -> Gateway:
+    cheap = Model("cheap", "cheap-backend", (Endpoint("a", "http://replica-a/v1"),))
+    return Gateway(
+        Settings({"cheap": cheap}, {"switchyard": Pair("switchyard", "cheap", "cheap")}, "key"),
+        Router(),
+        Compressor(),
+        Transport(),
+        Events(),
+    )
+
+
+def _run(coroutine: object) -> object:
+    return asyncio.run(coroutine)  # type: ignore[arg-type]
 
 
 class TestChatIngress:
@@ -131,6 +149,122 @@ class TestChatIngress:
             )
         assert response.status_code == 502
         assert upstream.closed
+
+    async def test_non_json_upstream_content_type_is_a_specific_error(self, gateway, request_body):
+        upstream = Response(
+            chunks=[b"<html>proxy interstitial</html>"], headers={"content-type": "text/html"}
+        )
+        gateway.transport.responses = [upstream]
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(gateway)), base_url="http://gateway"
+        ) as client:
+            response = await client.post(
+                "/v1/chat/completions",
+                json=request_body,
+                headers={"authorization": "Bearer client-key"},
+            )
+        assert response.status_code == 502
+        assert response.json()["error"]["code"] == "invalid_upstream_content_type"
+        assert upstream.closed
+        assert gateway.events.records[-1]["error"] == "invalid_upstream_content_type"
+
+    @pytest.mark.parametrize(
+        "content_type",
+        ["application/json; charset=utf-8", "APPLICATION/JSON", "application/vnd.api+json"],
+    )
+    async def test_json_content_types_are_accepted(self, gateway, request_body, content_type):
+        upstream = Response(headers={"content-type": content_type})
+        gateway.transport.responses = [upstream]
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(gateway)), base_url="http://gateway"
+        ) as client:
+            response = await client.post(
+                "/v1/chat/completions",
+                json=request_body,
+                headers={"authorization": "Bearer client-key"},
+            )
+        assert response.status_code == 200
+
+
+class TestHealthProbes:
+    async def test_readiness_requires_an_eligible_replica(self, gateway):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(gateway)), base_url="http://gateway"
+        ) as client:
+            ready = await client.get("/health/readiness")
+            gateway._cooldown("cheap", "a")
+            gateway._cooldown("cheap", "b")
+            still_ready = await client.get("/health/readiness")
+            gateway._cooldown("expensive", "c")
+            not_ready = await client.get("/health/readiness")
+            alive = await client.get("/health/liveliness")
+        assert ready.status_code == 200
+        assert ready.json() == {"status": "ok"}
+        assert still_ready.status_code == 200
+        assert not_ready.status_code == 503
+        assert not_ready.json() == {"status": "not_ready"}
+        assert alive.status_code == 200
+        assert gateway.events.records == []
+
+    async def test_readiness_reports_ready_after_cooldown_expires(self, settings):
+        now = [100.0]
+        gateway = Gateway(settings, Router(), Compressor(), Transport(), Events(), lambda: now[0])
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(gateway)), base_url="http://gateway"
+        ) as client:
+            gateway._cooldown("cheap", "a")
+            gateway._cooldown("cheap", "b")
+            gateway._cooldown("expensive", "c")
+            not_ready = await client.get("/health/readiness")
+            now[0] = 130.0
+            ready = await client.get("/health/readiness")
+        assert not_ready.status_code == 503
+        assert ready.status_code == 200
+
+
+class TestModelDiscoveryEvents:
+    async def test_discovery_emits_an_event_for_success_and_rejection(self, gateway):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(gateway)), base_url="http://gateway"
+        ) as client:
+            rejected = await client.get("/v1/models")
+            completed = await client.get(
+                "/v1/models", headers={"authorization": "Bearer client-key"}
+            )
+        assert rejected.status_code == 401
+        assert completed.status_code == 200
+        assert gateway.events.records == [
+            {
+                "event": "request",
+                "request_id": rejected.headers["x-request-id"],
+                "status": 401,
+                "outcome": "rejected",
+                "error": "unauthorized",
+            },
+            {
+                "event": "request",
+                "request_id": completed.headers["x-request-id"],
+                "status": 200,
+                "outcome": "completed",
+            },
+        ]
+
+
+@given(st.booleans())
+def test_every_discovery_request_emits_exactly_one_event(authorized):
+    gateway = _gateway()
+    headers = {"authorization": "Bearer key"} if authorized else {}
+
+    async def exercise() -> httpx.Response:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(gateway)), base_url="http://gateway"
+        ) as client:
+            return await client.get("/v1/models", headers=headers)
+
+    response = _run(exercise())
+    assert response.status_code == (200 if authorized else 401)
+    assert len(gateway.events.records) == 1
+    assert gateway.events.records[0]["outcome"] == ("completed" if authorized else "rejected")
 
 
 class TestStreams:

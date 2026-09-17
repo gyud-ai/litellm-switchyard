@@ -748,7 +748,7 @@
     {
       "source": "CHAT_ROUTE",
       "target": "UVICORN",
-      "description": "invalid_upstream_response or upstream_response_too_large 502 body",
+      "description": "invalid_upstream_content_type, invalid_upstream_response, or upstream_response_too_large 502 body",
       "seq": 78,
       "kind": "return",
       "outcome": "error",
@@ -759,6 +759,24 @@
       "target": "CLIENT",
       "description": "502 sanitized gateway error body",
       "seq": 79,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "CHAT_ROUTE",
+      "target": "HTTPX_RESPONSE",
+      "description": "chat reads the 200 response's content-type header before buffering the body",
+      "seq": 83,
+      "kind": "call",
+      "outcome": "error",
+      "phase": "error"
+    },
+    {
+      "source": "HTTPX_RESPONSE",
+      "target": "CHAT_ROUTE",
+      "description": "content-type lacks json; the body is never buffered and chat raises invalid_upstream_content_type",
+      "seq": 84,
       "kind": "return",
       "outcome": "error",
       "phase": "error"
@@ -822,15 +840,6 @@
       "target": "GATEWAY_OPEN",
       "description": "process restart recreates the Gateway, dropping process-local _positions and _cooldowns",
       "seq": 90,
-      "kind": "note",
-      "outcome": "anomaly",
-      "phase": "anomaly"
-    },
-    {
-      "source": "CHAT_ROUTE",
-      "target": "GATEWAY_BODY",
-      "description": "non-streaming branch has no content-type guard like the streaming branch, so a wrong-content-type 200 falls through to JSON parsing and a generic 502",
-      "seq": 91,
       "kind": "note",
       "outcome": "anomaly",
       "phase": "anomaly"

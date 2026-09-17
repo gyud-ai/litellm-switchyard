@@ -105,12 +105,15 @@ async def test_lifespan_serves_models_then_releases_every_adapter(settings, real
     await driver.stop()
     assert driver.error is None
     records = [json.loads(line) for line in output.getvalue().splitlines()]
-    assert len(records) == 2
+    assert len(records) == 3
     assert records[0]["event"] == "startup"
     assert records[0]["models"] == 2
     assert records[0]["pairs"] == 1
-    assert records[1]["event"] == "shutdown"
-    assert "error" not in records[1]
+    assert records[1]["event"] == "request"
+    assert records[1]["status"] == 200
+    assert records[1]["outcome"] == "completed"
+    assert records[2]["event"] == "shutdown"
+    assert "error" not in records[2]
     assert recorder.closed == ["compressor", "client"]
     assert recorder.clients[0].is_closed
     assert recorder.compressors[0].close_calls == 1

@@ -223,6 +223,27 @@ def test_round_robin_is_even_without_failures(endpoints, rounds):
     assert set(counts.values()) == {rounds}
 
 
+@given(
+    st.integers(min_value=1, max_value=5),
+    st.sets(st.integers(min_value=0, max_value=4)),
+)
+def test_readiness_tracks_eligible_replicas(endpoints, cooled):
+    model = _model("m", endpoints)
+    gateway = Gateway(
+        _settings({"m": model}),
+        Router(),
+        _ChangingCompressor(),
+        Transport(),
+        Events(),
+        lambda: 1000.0,
+    )
+    eligible = set(range(endpoints)) - cooled
+    for index in range(endpoints):
+        if index not in eligible:
+            gateway._cooldowns[("m", f"m-{index}")] = 1001.0
+    assert gateway.ready() is bool(eligible)
+
+
 @given(st.text(max_size=8).filter(lambda value: value not in {"capable", "efficient"}))
 def test_invalid_routing_tier_is_rejected(tier):
     class WrongRouter:

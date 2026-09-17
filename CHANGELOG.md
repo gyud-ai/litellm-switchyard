@@ -27,6 +27,15 @@ The version lives in `pyproject.toml` (`[project] version`).
   `[DONE]`, so clients can distinguish truncation from completion.
 - Streaming records abnormal exits as `interrupted` by default; `cancelled` is
   recorded only when a cancellation actually occurs.
+- `/health/readiness` now reflects replica availability: it returns `503
+  {"status":"not_ready"}` when every configured replica is cooling down and `200
+  {"status":"ok"}` while at least one replica is eligible; `/health/liveliness`
+  remains a static process check.
+- Non-streaming chat completions validate the upstream `content-type` and report
+  `invalid_upstream_content_type` for a non-JSON `200` instead of the generic
+  `invalid_upstream_response`.
+- `GET /v1/models` emits one sanitized request event per call on both the `200`
+  and `401` paths, matching the chat handler's event vocabulary.
 
 ## [0.4.0] - 2026-09-17
 

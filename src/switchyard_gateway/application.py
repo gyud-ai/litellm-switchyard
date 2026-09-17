@@ -86,6 +86,15 @@ class Gateway:
         self._positions: dict[str, int] = {}
         self._cooldowns: dict[tuple[str, str], float] = {}
 
+    def ready(self) -> bool:
+        """Report whether any configured replica is currently eligible for selection."""
+        now = self.clock()
+        return any(
+            self._cooldowns.get((model.name, endpoint.name), 0) <= now
+            for model in self.settings.models.values()
+            for endpoint in model.endpoints
+        )
+
     def _select(self, model: Model, excluded: set[str]) -> int:
         start = self._positions.get(model.name, 0)
         for offset in range(len(model.endpoints)):

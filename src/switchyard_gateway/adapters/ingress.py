@@ -199,9 +199,14 @@ def create_app(
             raise GatewayError("unauthorized", 401)
 
     @app.get("/health/liveliness")
-    @app.get("/health/readiness")
-    async def health() -> Payload:
+    async def liveliness() -> Payload:
         return {"status": "ok"}
+
+    @app.get("/health/readiness")
+    async def readiness(request: Request) -> JSONResponse:
+        if current(request).ready():
+            return JSONResponse({"status": "ok"})
+        return JSONResponse({"status": "not_ready"}, status_code=503)
 
     @app.get("/v1/models")
     async def models(request: Request) -> JSONResponse:
@@ -210,6 +215,14 @@ def create_app(
         try:
             authorize(request, gateway)
             names = [*gateway.settings.pairs, *gateway.settings.models]
+            gateway.events.emit(
+                {
+                    "event": "request",
+                    "request_id": request_id,
+                    "status": 200,
+                    "outcome": "completed",
+                }
+            )
             return JSONResponse(
                 {
                     "object": "list",
@@ -221,6 +234,15 @@ def create_app(
                 headers={"x-request-id": request_id},
             )
         except GatewayError as error:
+            gateway.events.emit(
+                {
+                    "event": "request",
+                    "request_id": request_id,
+                    "status": error.status,
+                    "outcome": "rejected",
+                    "error": error.code,
+                }
+            )
             return _error(error, request_id)
 
     @app.post("/v1/chat/completions", response_model=None)
@@ -257,6 +279,8 @@ def create_app(
                     raise GatewayError("invalid_upstream_stream")
                 handed_off = True
                 return OwnedStream(gateway, exchange, payload["model"], response_headers)
+            if "json" not in exchange.response.headers.get("content-type", "").lower():
+                raise GatewayError("invalid_upstream_content_type")
             body = bytearray()
             async for chunk in gateway.body(exchange):
                 body.extend(chunk)
