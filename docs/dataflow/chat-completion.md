@@ -14,7 +14,7 @@ while capturing provider `usage`, closes the upstream, and emits exactly one ter
 - **Response:**
   - **Success:** HTTP 200 JSON body with upstream `choices` intact, `model` rewritten to the requested alias, provider `usage` captured into the terminal event, and `x-gateway-model`/`x-gateway-endpoint` headers
   - **Failure:** A sanitized JSON error body (`_error`, `ingress.py:105`) with `x-request-id` and a status of 400/401/404/413/500/502/503/504; a wrong-type 200 is surfaced as the specific `invalid_upstream_content_type` 502
-  - **Exception:** An unhandled escape in the route or a cleanup failure in the terminal `finally` propagates to Starlette; the upstream is not leaked because `Gateway.finish` closes before emitting
+  - **Exception:** An unhandled escape in the route propagates to Starlette; `Gateway.finish` closes before emitting, and a close failure is recorded on the event (`close_failed`, non-completed outcome) instead of escaping
 
 ## Participants
 
@@ -36,7 +36,7 @@ while capturing provider `usage`, closes the upstream, and emits exactly one ter
 | `BACKEND` | 6 | intermediary | — | External OpenAI-compatible upstream that produces the JSON completion. | external upstream |
 | `HTTPX_RESPONSE` | 4 | intermediary | `HttpxResponse` | Open upstream response adapter exposing status, headers, chunk iteration, and idempotent close. | `src/switchyard_gateway/adapters/httpx.py:11` |
 | `GATEWAY_BODY` | 3 | intermediary | `Gateway.body` | Reads upstream bytes to exhaustion and records `first_body_byte_ms` on the first non-empty chunk. | `src/switchyard_gateway/application.py:251` |
-| `GATEWAY_FINISH` | 3 | intermediary | `Gateway.finish` | Closes the upstream response and emits exactly one terminal request event with the recorded outcome. | `src/switchyard_gateway/application.py:260` |
+| `GATEWAY_FINISH` | 3 | intermediary | `Gateway.finish` | Closes the upstream response and emits exactly one terminal request event with the recorded outcome; a close failure is recorded as `close_failed` instead of escaping. | `src/switchyard_gateway/application.py:260` |
 | `EVENTS` | 4 | sink | `JsonEvents.emit` | Sanitized JSON event sink writing one record per line to stdout. | `src/switchyard_gateway/adapters/logging.py:18` |
 
 ## Sequence
@@ -49,7 +49,7 @@ while capturing provider `usage`, closes the upstream, and emits exactly one ter
 6. (seq 14–19) `HeadroomCompressor.compress` (`headroom.py:50`) submits `_compress` to the single `ThreadPoolExecutor` (`headroom.py:18`), which calls `headroom.compress` with `kompress_model="disabled"` and returns a `CompressionResult` (`savings`, `no_savings`, or `failed_unknown`). `_open` rejects any result whose outcome is unknown or whose message structure changed (`_same_structure`, `application.py:58`), then writes the compressed rows back into the private `prepared` copy (`application.py:172-188`).
 7. (seq 20–24) `Gateway._select` round-robins an endpoint and `HttpxTransport.send` (`httpx.py:46`) opens `POST {base_url}/chat/completions` with `json=request`, returning an `HttpxResponse`. `_open` returns an `Exchange` carrying the open response, the event record, and start timings (`application.py:247-248`).
 8. (seq 25–30) `chat` reads the response to exhaustion through `async for chunk in gateway.body(exchange)` (`ingress.py:285`), which pulls `HttpxResponse.chunks` (`httpx.py:27`) and records `first_body_byte_ms` on the first non-empty chunk (`application.py:253-258`).
-9. (seq 31–35) `chat`'s `finally` calls `gateway.finish(exchange, "completed")` inside `anyio.CancelScope(shield=True)` (`ingress.py:333-335`) because `handed_off` is `False`. `finish` marks the exchange finished, closes the upstream response, updates `outcome`/`total_ms`, and emits exactly one terminal event through `JsonEvents.emit` (`application.py:260-271`).
+9. (seq 31–35) `chat`'s `finally` calls `gateway.finish(exchange, "completed")` inside `anyio.CancelScope(shield=True)` (`ingress.py:333-335`) because `handed_off` is `False`. `finish` marks the exchange finished, closes the upstream response, records `close_failed` and downgrades `completed` to `failed` when the close raises, updates `outcome`/`total_ms`, and emits exactly one terminal event through `JsonEvents.emit` (`application.py:260-282`). The close exception never escapes, so the already-built `JSONResponse` is still returned.
 10. (seq 36–37) `chat` rewrites `value["model"] = payload["model"]` (`ingress.py:295`), captures recognized integer `usage` fields into `exchange.event["usage"]` (`_usage`, `ingress.py:28`) and returns `JSONResponse(value, headers=response_headers)` with `x-request-id`, `x-gateway-model`, and `x-gateway-endpoint` (`ingress.py:269-273`, `284`). Uvicorn writes the 200 JSON body to the client.
 
 ## Error paths
@@ -110,24 +110,24 @@ Any non-`GatewayError` exception is caught by `chat`'s `except Exception` (`ingr
 
 ## Anomalies
 
-### Unguarded terminal close can discard an already-completed response
+### Terminal close failure is swallowed and recorded
 
 _Covers:_ seq 85, 86, 87
 
-`Gateway.finish` closes the upstream inside a `try` whose `finally` always emits the terminal event (`application.py:265-270`). If `HttpxResponse.close` (`httpx.py:35-37`, delegating to `httpx.Response.aclose`) raises — plausible after a body read that already failed with `upstream_read_failed` — the event is emitted with `outcome="completed"` (seq 86) and then the exception propagates out of `finish` into `chat`'s `finally` (`ingress.py:332-335`). Because that `finally` runs while unwinding a successful `return JSONResponse(...)`, the raised exception replaces the return value, so the client receives an ASGI server error instead of the completion that was already built and logged as completed. The non-streaming path has no shield or fallback around the close itself; only the caller is shielded.
+`Gateway.finish` swallows any failure from `HttpxResponse.close` (`httpx.py:35-37`, delegating to `httpx.Response.aclose`) — plausible after a body read that already failed with `upstream_read_failed` — and records it on the terminal event instead (`application.py:270-282`). The event gains `close_failed: true` (seq 85, 86) and its outcome is downgraded from `completed` to `failed`; an already non-completed outcome (`failed`, `cancelled`, `interrupted`) is kept as-is. `finish` then returns normally, so `chat`'s `finally` (`ingress.py:332-335`) no longer replaces the already-built `JSONResponse`; the client still receives the completion while the log no longer claims success (seq 87). Only `BaseException` subclasses that are not `Exception` (for example `asyncio.CancelledError` raised while closing) are re-raised after the event is emitted, so exactly one terminal record still exists and cancellation is not masked. `tests/test_application.py:TestFinishContracts` pins the swallowed-close contracts, `tests/test_properties.py:test_finish_emits_one_event_and_never_escapes_a_close_failure` pins exactly-one-emission for arbitrary outcomes and close failures, and `tests/test_ingress.py:test_failed_close_keeps_the_built_completion` asserts the client still receives the 200 completion.
 
 ### Replica cooldown and round-robin state dies on restart
 
 _Covers:_ seq 90
 
-`Gateway.__init__` keeps `_positions` and `_cooldowns` as plain in-memory dicts (`application.py:86-87`). They are process-local by design and explicitly single-worker (README §Configuration), so a Uvicorn restart recreates the `Gateway` and forgets every cooldown and rotation position. A backend that was cooled down for an outage is immediately eligible again after restart, and round-robin restarts at the first endpoint; the state is only ever rebuilt by observation. `tests/test_application.py:test_fresh_cooldown_table_keeps_replicas_eligible` documents that a fresh table keeps all replicas eligible. The same state also backs `/health/readiness` (`application.py:89-96`), so readiness forgets cooldowns on restart along with routing; see [health-check](health-check.md).
+`Gateway.__init__` keeps `_positions` and `_cooldowns` as plain in-memory dicts (`application.py:86-87`). This is the accepted single-worker trade-off, now stated in README §Configuration and AGENTS.md: a Uvicorn restart recreates the `Gateway` and forgets every cooldown and rotation position. A backend that was cooled down for an outage is immediately eligible again after restart, and round-robin restarts at the first endpoint; the state is only ever rebuilt by observation. The same state also backs `/health/readiness` (`application.py:89-96`), so readiness forgets cooldowns on restart along with routing; see [health-check](health-check.md). `tests/test_application.py:test_fresh_cooldown_table_keeps_replicas_eligible`, `test_reconstructed_gateway_forgets_cooldowns`, and `test_reconstructed_gateway_resets_round_robin_position` pin the documented behavior.
 
 ## Verification
 
 - `src/switchyard_gateway/adapters/ingress.py:create_app.chat` — traced authorization, the `max_request_bytes` body cap, `_reject_constant`, `json.loads`/`_validate`, `gateway.open`, the `status >= 400` gate, the non-streaming `content-type` JSON guard (`invalid_upstream_content_type`), the buffer loop with the 32 MiB `_MAX_RESPONSE` bound, the `model` rewrite, `_usage` capture, `JSONResponse`, `except GatewayError`/`CancelledError`/`Exception`, and the `finally` finish guard.
 - `src/switchyard_gateway/adapters/ingress.py:create_app.authorize` and `_validate`/`_usage`/`_error` — confirmed the constant-time check, every 400 code, the `invalid_json`/`request_too_large` codes, the usage allowlist, and the sanitized error body.
 - `src/switchyard_gateway/application.py:Gateway.open` / `_open` / `_select` / `_cooldown` — confirmed routing, `eligible_indices`, structure-checked compression fail-open, round-robin, bounded two-attempt failover, retryable-status cooldowns, and the `BaseException` event emit/re-raise.
-- `src/switchyard_gateway/application.py:Gateway.body` / `finish` and `eligible_indices`/`_same_structure` — confirmed first-body-byte timing, the idempotent `finished` guard, close-before-emit ordering, and protected-row selection.
+- `src/switchyard_gateway/application.py:Gateway.body` / `finish` and `eligible_indices`/`_same_structure` — confirmed first-body-byte timing, the idempotent `finished` guard, close-before-emit ordering, close-failure swallowing with `close_failed` and outcome downgrade, and protected-row selection.
 - `src/switchyard_gateway/adapters/switchyard.py:SwitchyardRouter.route` / `_normalize` / `_CaptureClient` — confirmed capture-client stage routing and that exactly one request is captured.
 - `src/switchyard_gateway/adapters/headroom.py:HeadroomCompressor.compress` / `_compress` — confirmed executor isolation, fail-open `failed_unknown`, and slot release on thread exit.
 - `src/switchyard_gateway/adapters/httpx.py:HttpxTransport.send` / `HttpxResponse.chunks` / `close` — confirmed the JSON POST, header auth, normalized transport failures, and idempotent close.
@@ -135,7 +135,7 @@ _Covers:_ seq 90
 - `src/switchyard_gateway/bootstrap.py:build_app` / `main` / `uvicorn.run` — confirmed single-worker composition and process ownership.
 - `src/switchyard_gateway/domain.py:Settings` / `GatewayError` / `ConnectFailure` / `CompressionResult` and `src/switchyard_gateway/ports.py:TierRouter`/`HistoryCompressor`/`BackendTransport`/`EventSink` — confirmed the boundary types the paths cross.
 - `tests/test_ingress.py:TestChatIngress` — pins alias/usage rewriting, `private output` exclusion from events, invalid-request 400s, the upstream-body non-exposure, the `text/html` 200 surfaced as `invalid_upstream_content_type` with the upstream closed, and invalid upstream JSON closing the response.
-- `tests/test_application.py:TestReplicaSelection` / `TestReplicaPolicyContracts` — pin round-robin, retryable-status failover, cooldown expiry, no-eligible-replica 503, compression fail-open, and structure-mutation rejection.
+- `tests/test_application.py:TestReplicaSelection` / `TestReplicaPolicyContracts` / `TestFinishContracts` — pin round-robin, retryable-status failover, cooldown expiry, restart state reset, no-eligible-replica 503, compression fail-open, structure-mutation rejection, and close-failure recording.
 - `tests/test_events.py` — pins the completed/failed event contracts and the `retry`/`replica_failure` records.
 - `docs/dataflow/data-flow-graph.schema.json` — contract revision 3 validated by `jsonschema` and `check_graphs.py`.
 
@@ -156,7 +156,7 @@ _Covers:_ seq 90
 
 - Request/response pairs use `call`/`return`; terminal and replica observability lines use `event`; the design-level restart observation (seq 90) uses `note`.
 - The retryable-response close before failover (seq 63) is a `call` even though it sits on the error subgraph, because it is a real synchronous call to `HttpxResponse.close`.
-- The escaping-cleanup fault (seq 87) is an `event` because the exception leaves the request handler rather than returning a value.
+- The swallowed close failure (seq 85–87) stays on the anomaly subgraph: seq 85 is the raising `return` from `close`, seq 86 the downgraded event, and seq 87 a `return` because `finish` now returns normally instead of letting the exception escape the request handler.
 
 ### Modeling choices
 

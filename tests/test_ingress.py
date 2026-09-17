@@ -185,6 +185,25 @@ class TestChatIngress:
             )
         assert response.status_code == 200
 
+    async def test_failed_close_keeps_the_built_completion(self, gateway, request_body):
+        upstream = Response(close_error=RuntimeError("private close diagnostic"))
+        gateway.transport.responses = [upstream]
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(gateway)), base_url="http://gateway"
+        ) as client:
+            response = await client.post(
+                "/v1/chat/completions",
+                json=request_body,
+                headers={"authorization": "Bearer client-key"},
+            )
+        assert response.status_code == 200
+        assert response.json()["model"] == "switchyard"
+        assert upstream.closed
+        (event,) = gateway.events.records
+        assert event["outcome"] == "failed"
+        assert event["close_failed"] is True
+        assert "private" not in json.dumps(gateway.events.records)
+
 
 class TestHealthProbes:
     async def test_readiness_requires_an_eligible_replica(self, gateway):

@@ -58,11 +58,13 @@ Out of scope: `scripts/smoke.py`, `scripts/container_smoke.py`, and
 Findings that recur across lifecycles are grouped; the pair prose is
 authoritative and cites the code.
 
-### Replica state dies on restart
+### Replica state is process-local by design
 
 - [chat-completion](chat-completion.md) and [chat-stream](chat-stream.md) —
   `application.py:Gateway.__init__` keeps `_positions`/`_cooldowns` in process
   memory, so a restart forgets round-robin position and cools nothing down.
+  Accepted and documented single-worker trade-off (README §Configuration,
+  AGENTS.md), pinned by `tests/test_application.py:test_reconstructed_gateway_*`.
 
 ### Failures swallowed or hidden from the caller
 
@@ -72,8 +74,9 @@ authoritative and cites the code.
   Cancellation is recorded but never reaches the client, and any outcome-less
   abnormal exit now defaults to `interrupted` rather than `cancelled`.
 - [chat-completion](chat-completion.md) — `application.py:Gateway.finish`
-  closes the upstream before emitting; if the close raises, the event is logged
-  `completed` and the exception replaces the already-built JSON response.
+  swallows a raising upstream close and records `close_failed: true` with a
+  non-completed outcome, so the built JSON response survives and the log no
+  longer claims success.
 
 ### Probes and side effects absent where expected
 

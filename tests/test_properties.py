@@ -4,7 +4,7 @@ import asyncio
 import copy
 
 import pytest
-from conftest import Events, Router, Transport
+from conftest import Events, Response, Router, Transport
 from hypothesis import given
 from hypothesis import strategies as st
 
@@ -200,6 +200,36 @@ def test_same_structure_detects_length_changes(before, after):
     if len(before) == len(after):
         return
     assert not _same_structure(before, after)
+
+
+@given(
+    st.lists(
+        st.sampled_from(["completed", "failed", "cancelled", "interrupted"]),
+        min_size=1,
+        max_size=4,
+    ),
+    st.sampled_from([None, RuntimeError("private close failure"), ValueError("a"), OSError("b")]),
+)
+def test_finish_emits_one_event_and_never_escapes_a_close_failure(outcomes, close_error):
+    response = Response(close_error=close_error)
+    transport = Transport()
+    transport.responses = [response]
+    gateway = Gateway(_settings(), Router(), _ChangingCompressor(), transport, Events())
+    first = outcomes[0]
+
+    async def exercise() -> object:
+        exchange = await gateway.open({"model": "direct", "messages": []}, {}, "id")
+        for outcome in outcomes:
+            await gateway.finish(exchange, outcome)
+        return exchange
+
+    exchange = _run(exercise())
+    (event,) = gateway.events.records
+    expected = "failed" if close_error is not None and first == "completed" else first
+    assert event["outcome"] == expected
+    assert event.get("close_failed", False) is (close_error is not None)
+    assert exchange.finished is True
+    assert "private" not in str(event)
 
 
 @given(

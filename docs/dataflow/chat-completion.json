@@ -811,7 +811,7 @@
     {
       "source": "HTTPX_RESPONSE",
       "target": "GATEWAY_FINISH",
-      "description": "close() can raise inside finish; finish's finally still emits the terminal event before the exception escapes",
+      "description": "close() can raise inside finish; the failure is swallowed and recorded instead of escaping",
       "seq": 85,
       "kind": "return",
       "outcome": "anomaly",
@@ -820,25 +820,25 @@
     {
       "source": "GATEWAY_FINISH",
       "target": "EVENTS",
-      "description": "terminal record already says outcome=completed while the client never receives the completion",
+      "description": "terminal record downgrades outcome=completed to failed and sets close_failed=true when the close itself failed",
       "seq": 86,
       "kind": "event",
       "outcome": "anomaly",
       "phase": "anomaly"
     },
     {
-      "source": "CHAT_ROUTE",
-      "target": "UVICORN",
-      "description": "the exception escaping chat's finally discards the already-built JSONResponse, turning a completed request into an ASGI server error",
+      "source": "GATEWAY_FINISH",
+      "target": "CHAT_ROUTE",
+      "description": "finish returns normally after swallowing the close failure, so the already-built JSONResponse still reaches the client",
       "seq": 87,
-      "kind": "event",
+      "kind": "return",
       "outcome": "anomaly",
       "phase": "anomaly"
     },
     {
       "source": "UVICORN",
       "target": "GATEWAY_OPEN",
-      "description": "process restart recreates the Gateway, dropping process-local _positions and _cooldowns",
+      "description": "process restart recreates the Gateway; cooldown deadlines and round-robin positions are process-local, so they reset by design (documented single-worker trade-off)",
       "seq": 90,
       "kind": "note",
       "outcome": "anomaly",

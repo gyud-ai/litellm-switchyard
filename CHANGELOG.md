@@ -36,6 +36,15 @@ The version lives in `pyproject.toml` (`[project] version`).
   `invalid_upstream_response`.
 - `GET /v1/models` emits one sanitized request event per call on both the `200`
   and `401` paths, matching the chat handler's event vocabulary.
+- A failed upstream `close` during terminal cleanup no longer replaces an
+  already-built non-streaming completion with an ASGI 500. The terminal event
+  records `close_failed: true` with a non-completed outcome.
+
+### Changed
+
+- Documented that replica cooldown deadlines and round-robin positions are
+  process-local and reset on restart, and pinned that single-worker trade-off
+  with tests.
 
 ## [0.4.0] - 2026-09-17
 

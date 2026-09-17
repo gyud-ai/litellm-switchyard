@@ -69,6 +69,64 @@ class TestRoutingAndCompression:
         history["messages"][-1]["tool_call_id"] = "old-call"
         assert eligible_indices(history["messages"]) == []
 
+    def test_nested_tool_chain_protects_the_earliest_call(self):
+        rows = [
+            {"role": "user", "content": "u0"},
+            {"role": "user", "content": "u1"},
+            {"role": "user", "content": "u2"},
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "t"}]},
+            {"role": "user", "content": "u4"},
+            {"role": "user", "content": "u5"},
+            {"role": "tool", "tool_call_id": "t", "content": "r6"},
+            {"role": "user", "content": "u7"},
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "k"}]},
+            {"role": "user", "content": "u9"},
+            {"role": "assistant", "content": "a10"},
+            {"role": "user", "content": "u11"},
+            {"role": "tool", "tool_call_id": "k", "content": "r12"},
+        ]
+        assert eligible_indices(rows) == [0, 1, 2, 3, 4, 5, 6, 7]
+
+    async def test_direct_route_does_not_mutate_the_request(self, gateway, history):
+        history["model"] = "cheap"
+        original = copy.deepcopy(history)
+        exchange = await gateway.open(history, {}, "private")
+        assert gateway.compressor.calls
+        assert history == original
+        assert gateway.transport.calls[0][1]["messages"][3]["content"] == "compressed"
+        await gateway.finish(exchange, "completed")
+
+    async def test_model_defaults_are_not_mutated_by_compression(self, settings):
+        model = settings.models["cheap"]
+        settings.models["cheap"] = replace(
+            model,
+            defaults={
+                "messages": [
+                    {"role": "user", "content": "old"},
+                    {"role": "assistant", "content": "old"},
+                    {"role": "user", "content": "current"},
+                ]
+            },
+        )
+        transport = Transport()
+        gateway = Gateway(settings, Router(), Compressor(), transport, Events())
+        exchange = await gateway.open({"model": "cheap"}, {}, "private")
+        assert settings.models["cheap"].defaults["messages"][0]["content"] == "old"
+        assert transport.calls[0][1]["messages"][0]["content"] == "compressed"
+        await gateway.finish(exchange, "completed")
+
+    async def test_in_place_compressor_structure_mutation_is_rejected(self, gateway, history):
+        class InPlace:
+            async def compress(self, messages, model):
+                messages[0]["extra"] = True
+                return CompressionResult(messages, "savings", 1, 1, 0)
+
+        gateway.compressor = InPlace()
+        exchange = await gateway.open(history, {}, "private")
+        assert exchange.event["compression"] == "failed_unknown"
+        assert gateway.transport.calls[0][1]["messages"] == history["messages"]
+        await gateway.finish(exchange, "completed")
+
     async def test_rejects_structure_mutation_from_adapter(self, gateway, history):
         class BrokenCompressor:
             async def compress(self, messages, model):
@@ -204,6 +262,54 @@ class TestReadiness:
         assert gateway.events.records == []
 
 
+class TestFinishContracts:
+    async def test_close_failure_cannot_replace_a_completed_response(self, gateway, request_body):
+        upstream = Response(close_error=RuntimeError("private close diagnostic"))
+        gateway.transport.responses = [upstream]
+        exchange = await gateway.open(request_body, {}, "close-1")
+        await gateway.finish(exchange, "completed")
+        (event,) = gateway.events.records
+        assert event["outcome"] == "failed"
+        assert event["close_failed"] is True
+        assert "private" not in str(event)
+        assert upstream.closed
+
+    @pytest.mark.parametrize("outcome", ["failed", "cancelled", "interrupted"])
+    async def test_close_failure_keeps_an_already_failed_outcome(
+        self, gateway, request_body, outcome
+    ):
+        gateway.transport.responses = [Response(close_error=RuntimeError("private"))]
+        exchange = await gateway.open(request_body, {}, "close-2")
+        await gateway.finish(exchange, outcome)
+        (event,) = gateway.events.records
+        assert event["outcome"] == outcome
+        assert event["close_failed"] is True
+
+    async def test_close_success_records_no_close_failure(self, gateway, request_body):
+        exchange = await gateway.open(request_body, {}, "close-3")
+        await gateway.finish(exchange, "completed")
+        (event,) = gateway.events.records
+        assert event["outcome"] == "completed"
+        assert "close_failed" not in event
+
+    async def test_close_failure_still_emits_exactly_one_event(self, gateway, request_body):
+        gateway.transport.responses = [Response(close_error=RuntimeError("private"))]
+        exchange = await gateway.open(request_body, {}, "close-4")
+        await gateway.finish(exchange, "completed")
+        await gateway.finish(exchange, "completed")
+        assert exchange.finished is True
+        assert len(gateway.events.records) == 1
+
+    async def test_close_cancellation_emits_then_propagates(self, gateway, request_body):
+        gateway.transport.responses = [Response(close_error=asyncio.CancelledError())]
+        exchange = await gateway.open(request_body, {}, "close-5")
+        with pytest.raises(asyncio.CancelledError):
+            await gateway.finish(exchange, "completed")
+        (event,) = gateway.events.records
+        assert event["outcome"] == "failed"
+        assert event["close_failed"] is True
+
+
 class TestReplicaPolicyContracts:
     async def test_round_robin_advances_in_configured_order(self):
         model = Model(
@@ -237,6 +343,105 @@ class TestReplicaPolicyContracts:
         gateway = Gateway(settings, Router(), Compressor(), transport, Events(), lambda: 0.0)
         exchange = await gateway.open(request_body, {}, "id")
         assert transport.calls[-1][0].name == "a"
+        await gateway.finish(exchange, "completed")
+
+    async def test_reconstructed_gateway_forgets_cooldowns(self, settings, request_body):
+        """Restart is a documented single-worker trade-off: cooldowns are process-local."""
+        now = [100.0]
+        transport = Transport()
+        gateway = Gateway(settings, Router(), Compressor(), transport, Events(), lambda: now[0])
+        transport.responses = [ConnectFailure(), Response()]
+        exchange = await gateway.open(request_body, {}, "before")
+        await gateway.finish(exchange, "completed")
+        assert gateway._cooldowns[("cheap", "a")] > now[0]
+
+        restarted = Gateway(settings, Router(), Compressor(), transport, Events(), lambda: now[0])
+        assert restarted._cooldowns == {}
+        exchange = await restarted.open(request_body, {}, "after")
+        assert transport.calls[-1][0].name == "a"
+        await restarted.finish(exchange, "completed")
+
+    async def test_reconstructed_gateway_resets_round_robin_position(self, settings, request_body):
+        """Restart is a documented single-worker trade-off: positions are process-local."""
+        transport = Transport()
+        gateway = Gateway(settings, Router(), Compressor(), transport, Events())
+        exchange = await gateway.open(request_body, {}, "before")
+        await gateway.finish(exchange, "completed")
+        assert gateway._positions["cheap"] == 1
+
+        restarted = Gateway(settings, Router(), Compressor(), transport, Events())
+        assert restarted._positions == {}
+        exchange = await restarted.open(request_body, {}, "after")
+        assert transport.calls[-1][0].name == "a"
+        await restarted.finish(exchange, "completed")
+
+    async def test_fresh_alternate_is_available_at_a_zero_clock(self, settings, request_body):
+        transport = Transport()
+        gateway = Gateway(settings, Router(), Compressor(), transport, Events(), lambda: 0.0)
+        transport.responses = [Response(503), Response()]
+        exchange = await gateway.open(request_body, {}, "id")
+        assert exchange.event["endpoint"] == "b"
+        assert exchange.event["attempts"] == 2
+        await gateway.finish(exchange, "completed")
+
+    async def test_cooled_alternate_keeps_the_retryable_response(self, settings, request_body):
+        now = [100.0]
+        transport = Transport()
+        gateway = Gateway(settings, Router(), Compressor(), transport, Events(), lambda: now[0])
+        transport.responses = [ConnectFailure(), Response(), Response(503)]
+        exchange = await gateway.open(request_body, {}, "one")
+        await gateway.finish(exchange, "completed")
+        assert gateway._cooldowns[("cheap", "a")] > now[0]
+
+        exchange = await gateway.open(request_body, {}, "two")
+        assert exchange.response.status == 503
+        assert len(transport.calls) == 3
+        await gateway.finish(exchange, "failed")
+
+    async def test_cooldown_expiry_allows_failover_off_a_rejected_replica(
+        self, settings, request_body
+    ):
+        now = [100.0]
+        transport = Transport()
+        gateway = Gateway(settings, Router(), Compressor(), transport, Events(), lambda: now[0])
+        gateway._cooldown("cheap", "b", "30")
+        now[0] = 130.0
+        transport.responses = [Response(503), Response()]
+        exchange = await gateway.open(request_body, {}, "id")
+        assert exchange.response.status == 200
+        assert [call[0].name for call in transport.calls] == ["a", "b"]
+        await gateway.finish(exchange, "completed")
+
+    async def test_single_replica_is_never_reused_within_a_request(self, settings, request_body):
+        model = settings.models["cheap"]
+        settings.models["cheap"] = replace(model, endpoints=model.endpoints[:1])
+        single = replace(settings, cooldown_seconds=0)
+        transport = Transport()
+        transport.responses = [Response(503), Response()]
+        gateway = Gateway(single, Router(), Compressor(), transport, Events(), lambda: 0.0)
+        exchange = await gateway.open(request_body, {}, "id")
+        assert exchange.response.status == 503
+        assert len(transport.calls) == 1
+        await gateway.finish(exchange, "failed")
+
+    async def test_round_robin_skips_a_cooled_start_endpoint(self):
+        model = Model(
+            "m",
+            "m",
+            tuple(Endpoint(name, f"http://{name}/v1") for name in ("a", "b", "c")),
+        )
+        transport = Transport()
+        gateway = Gateway(
+            Settings({"m": model}, {}, "key"),
+            Router(),
+            Compressor(),
+            transport,
+            Events(),
+            lambda: 100.0,
+        )
+        gateway._cooldown("m", "a", "60")
+        exchange = await gateway.open({"model": "m", "messages": []}, {}, "id")
+        assert transport.calls[-1][0].name == "b"
         await gateway.finish(exchange, "completed")
 
     async def test_endpoint_is_eligible_at_exact_cooldown_expiry(self, settings, request_body):
@@ -374,5 +579,6 @@ class TestCompressionOutcomeContracts:
         gateway.compressor = FailedUnknown()
         exchange = await gateway.open(history, {}, "id")
         assert exchange.event["compression"] == "failed_unknown"
+        assert exchange.event["tokens_before"] is None
         assert gateway.transport.calls[0][1]["messages"] == history["messages"]
         await gateway.finish(exchange, "completed")

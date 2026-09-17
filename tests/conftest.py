@@ -59,6 +59,7 @@ class Response:
         status: int = 200,
         chunks: list[bytes] | None = None,
         headers: dict[str, str] | None = None,
+        close_error: BaseException | None = None,
     ) -> None:
         self.status = status
         self.headers = headers or {"content-type": "application/json"}
@@ -76,6 +77,7 @@ class Response:
         )
         self.closed = False
         self.error: Exception | None = None
+        self.close_error = close_error
 
     async def chunks(self) -> AsyncIterator[bytes]:
         for chunk in self.data:
@@ -85,6 +87,8 @@ class Response:
 
     async def close(self) -> None:
         self.closed = True
+        if self.close_error is not None:
+            raise self.close_error
 
 
 class Transport:
