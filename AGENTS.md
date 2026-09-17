@@ -26,8 +26,9 @@ Read README.md for setup, architecture, migration, and verification commands.
   single-worker trade-off is intentional and pinned by tests.
 - Close every upstream response, including cancellation before stream iteration.
   Emit exactly one terminal event for an opened exchange. A close failure is
-  recorded on the event (`close_failed` with a non-completed outcome), never
-  allowed to escape and replace an already-built response.
+  recorded on the event (`close_failed` with a non-completed outcome) and must
+  not replace an already-built response; cancellation is re-raised after the
+  event is emitted.
 - Logs and errors contain configured public labels and sanitized codes, never
   payloads, credentials, backend URLs, raw headers, or raw dependency exceptions.
 - `.env` and `config.jsonc` stay untracked. Do not touch existing Postgres volumes.
