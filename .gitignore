@@ -4,3 +4,13 @@ __pycache__/
 .pytest_cache/
 .venv/
 *.bak
+config.jsonc
+config.*.local.jsonc
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+.coverage
+htmlcov/
+mutants/
+dist/
+*.egg-info/

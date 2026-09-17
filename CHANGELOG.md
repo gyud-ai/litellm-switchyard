@@ -10,15 +10,33 @@ The version lives in `pyproject.toml` (`[project] version`).
 
 ### Added
 
-- Two-endpoint cheap-tier example: `profiles/stage/litellm.multiple.yaml`
-  (the default inventory plus one extra routed cheap deployment reusing every
-  `CHEAP_*` variable except a hardcoded second `api_base`). Both routing
-  layers dedupe by model string, so Switchyard picks the tier and LiteLLM
-  load-balances/fails over across the tier's endpoints. Distinct from the
-  multipair variant (one pair with two cheap endpoints, not two pairs).
-- Static checks (`tests/test_multiple_endpoints.py`) pinning the example's
-  minimal-diff shape, the shim/upstream dedupe contract on the triple pool,
-  plus a live tier-routing test for the extra-endpoint case.
+- Unit, integration, and smoke test tiers that need no model inference, plus
+  Hypothesis property tests for history protection, structural comparison,
+  round-robin distribution, routing-tier validation, retry bounds, and cooldown
+  parsing.
+- A mutation-testing configuration (`[tool.mutmut]`) targeting the routing and
+  compression policy in `application.py` and `domain.py`.
+
+## [1.0.0] - 2026-09-17
+
+### Added
+
+- A Python gateway with ports and adapters for routing, compression, transport,
+  configuration, HTTP ingress, and JSON observability.
+- JSONC configuration for arbitrary named pairs and same-model replicas,
+  round-robin selection, cooldowns, and bounded same-model failover.
+- Streaming Chat Completions, direct model routes, authentication, protected
+  history, structured logs, real adapter contracts, and offline benchmarks.
+
+### Changed
+
+- **Breaking:** replace LiteLLM, Postgres, and the Headroom sidecar with one gateway
+  container. Migrate environment/YAML inventories to JSONC. Admin UI, virtual
+  keys, spend endpoints, and LiteLLM-specific request/response fields are removed.
+- Require Python 3.14 and pin nemo-switchyard 0.2.0 and headroom-ai 0.37.0 without
+  LiteLLM or server/proxy/ML extras. Structural compression is enabled by default.
+- Publish the gateway image using the project version. Existing database volumes
+  are left untouched for rollback.
 
 ## [0.3.0] - 2026-09-16
 
@@ -89,7 +107,9 @@ plus opt-in Headroom prompt compression.
   (`1bfe2bb`, `6f76e67`).
 - Apache-2.0 license, quickstart and setup docs.
 
-[Unreleased]: https://github.com/gyud-ai/litellm-switchyard/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/gyud-ai/litellm-switchyard/compare/v1.0.0...HEAD
 [0.3.0]: https://github.com/gyud-ai/litellm-switchyard/compare/v0.1.1...v0.3.0
 [0.1.1]: https://github.com/gyud-ai/litellm-switchyard/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/gyud-ai/litellm-switchyard/releases/tag/v0.1.0
+
+[1.0.0]: https://github.com/gyud-ai/litellm-switchyard/compare/v0.3.0...v1.0.0

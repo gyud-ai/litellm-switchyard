@@ -1,102 +1,47 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 gyud-labs. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-
-# Continuous integration: everything verifiable without live backends or
-# secrets. Live tests (`pytest -m live`) stay manual — see AGENTS.md.
 name: CI
-
 on:
   push:
     branches: [main]
-    # Docs-only changes touch nothing CI verifies (no test reads them),
-    # so skip the whole run — notably the ~10 min cold image builds.
-    paths-ignore:
-      - README.md
-      - AGENTS.md
-      - CHANGELOG.md
-      - LICENSE
   pull_request:
-    paths-ignore:
-      - README.md
-      - AGENTS.md
-      - CHANGELOG.md
-      - LICENSE
-
 permissions:
   contents: read
-  # type=gha build cache reads/writes through the Actions cache service.
-  actions: write
-
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
-  static-tests:
+  verify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v7
-      - run: uv run --group test pytest tests/ -m "not live"
-
-  compose-validate:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      # Dummy values satisfy the `:?` guards; nothing here touches real backends.
-      - run: |
-          LITELLM_MASTER_KEY=dummy \
-          POSTGRES_PASSWORD=dummy \
-          CHEAP_API_BASE=http://cheap:8000/v1 \
-          CHEAP_API_KEY=dummy \
-          CHEAP_MODEL_ID=cheap-model \
-          EXPENSIVE_API_BASE=http://expensive:8000/v1 \
-          EXPENSIVE_API_KEY=dummy \
-          EXPENSIVE_MODEL_ID=expensive-model \
+      - run: uv sync --frozen --group dev
+      - run: uv run --frozen ruff check .
+      - run: uv run --frozen ruff format --check .
+      - run: uv run --frozen mypy src
+      - run: uv run --frozen pytest -m 'not live'
+      - run: uv lock --check
+      - run: uv run --frozen python scripts/smoke.py
+      - name: Validate Compose
+        run: |
+          cp .env.example .env
+          cp config.example.jsonc config.jsonc
           docker compose config --quiet
-
-  build-images:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        dockerfile: [Dockerfile, Dockerfile.headroom]
-    steps:
-      - uses: actions/checkout@v6
-      - uses: docker/setup-buildx-action@v4
-      # Full builds: the litellm image compiles the Switchyard wheel and runs
-      # the build-time TOML smoke test (catches upstream drift); the first run
-      # is slow (~10 min Rust compile), later runs hit the GHA cache.
-      - uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: ${{ matrix.dockerfile }}
-          push: false
-          cache-from: type=gha,scope=${{ matrix.dockerfile }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.dockerfile }}
-
+      - name: Build and smoke-test image
+        run: |
+          docker build -t gateway-ci .
+          docker run --rm --entrypoint /app/.venv/bin/python \
+            -v "$PWD/scripts/smoke.py:/tmp/smoke.py:ro" gateway-ci /tmp/smoke.py
+          uv run --frozen python scripts/container_smoke.py --image gateway-ci
+      - name: Refuse tracked private configuration
+        run: |
+          test -z "$(git ls-files -- .env config.jsonc)"
   hygiene:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Refuse a tracked .env
-        run: |
-          if git ls-files | grep -qx ".env"; then
-            echo ".env is tracked; it must stay gitignored." >&2
-            exit 1
-          fi
-      # v3 runs on Node 24 (v2 died with the Node 20 runner removal).
-      # Organization repos need a free GITLEAKS_LICENSE secret from gitleaks.io;
-      # personal-account repos run without it.
       - uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
-
-  lockfile:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v7
-      - run: uv lock --check

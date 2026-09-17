@@ -1,22 +1,82 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 gyud-labs. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-
 [project]
-name = "litellm-switchyard"
-version = "0.4.0"
-description = "LiteLLM proxy with NVIDIA Switchyard stage routing (tests and tooling)"
+name = "switchyard-gateway"
+version = "1.0.0"
+description = "A small ports-and-adapters gateway for Switchyard and Headroom"
 readme = "README.md"
-requires-python = ">=3.11"
-license = { text = "Apache-2.0" }
-dependencies = []
+requires-python = ">=3.14,<3.15"
+license = "Apache-2.0"
+dependencies = [
+  "nemo-switchyard==0.2.0",
+  "headroom-ai==0.37.0",
+  "fastapi>=0.136.1,<1",
+  "uvicorn>=0.46,<1",
+  "httpx>=0.28.1,<1",
+  "anyio>=4.12,<5",
+  "starlette>=0.46,<2",
+  "pydantic>=2.13.3,<3",
+  "json5>=0.12,<1",
+]
+
+[project.scripts]
+switchyard-gateway = "switchyard_gateway.bootstrap:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [dependency-groups]
-test = [
-    "pytest>=8",
-    "pyyaml",
+dev = [
+    "pytest>=9",
+    "pytest-asyncio>=1",
+    "ruff>=0.15",
+    "mypy>=1.19",
+    "pyyaml>=6",
+    "hypothesis>=6.168.0",
+    "pytest-cov>=7.1.0",
+    "pytest-socket>=0.8.1",
+    "mutmut>=3.8.0",
 ]
 
 [tool.pytest.ini_options]
+asyncio_mode = "auto"
 markers = [
-    "live: requires a running proxy with .env sourced (spends backend calls)",
+    "unit: fast logic tests driven by fake ports and pure functions",
+    "integration: real pinned adapters, transport, and ASGI ingress without backend inference",
+    "smoke: end-to-end stack with real adapters and fake local backends",
+    "live: calls real configured backends and may incur charges",
 ]
+
+[tool.mutmut]
+source_paths = ["src/switchyard_gateway"]
+only_mutate = ["*application.py", "*domain.py"]
+also_copy = ["config.example.jsonc"]
+pytest_add_cli_args = [
+    "-q",
+    "-p",
+    "no:cacheprovider",
+    "-m",
+    "unit",
+    "--deselect=tests/test_config_architecture.py::TestArchitecture",
+]
+pytest_add_cli_args_test_selection = ["tests/"]
+use_git_change_detection = false
+mutate_only_covered_lines = true
+timeout_multiplier = 10.0
+timeout_constant = 2.0
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+files = ["src"]
+
+[[tool.mypy.overrides]]
+module = ["headroom.*", "switchyard.*"]
+follow_imports = "skip"
+ignore_missing_imports = true
