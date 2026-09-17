@@ -19,6 +19,10 @@ from ..domain import GatewayError, Payload
 
 _EVENT_END = re.compile(rb"\r?\n\r?\n")
 _MAX_RESPONSE = 32 * 1024 * 1024
+_INTERRUPTED_FRAME = (
+    b'data: {"error":{"message":"upstream_stream_interrupted",'
+    b'"type":"gateway_error","code":"upstream_stream_interrupted"}}\n\n'
+)
 
 
 def _usage(value: object) -> Payload | None:
@@ -145,7 +149,7 @@ async def sse_body(gateway: Gateway, exchange: Exchange, alias: str) -> AsyncIte
         raise
     except Exception:
         exchange.event["stream_outcome"] = "interrupted"
-        # No synthetic success terminator or raw provider error is emitted.
+        yield _INTERRUPTED_FRAME
         return
 
 
@@ -162,12 +166,16 @@ class OwnedStream(StreamingResponse):
         self.exchange = exchange
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        outcome = "interrupted"
         try:
             await super().__call__(scope, receive, send)
+        except asyncio.CancelledError:
+            outcome = "cancelled"
+            raise
         finally:
             with anyio.CancelScope(shield=True):
                 await self.gateway.finish(
-                    self.exchange, self.exchange.event.pop("stream_outcome", "cancelled")
+                    self.exchange, self.exchange.event.pop("stream_outcome", outcome)
                 )
 
 

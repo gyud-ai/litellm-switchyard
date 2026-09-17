@@ -106,10 +106,13 @@ fully protected requests may save no tokens. Compression errors continue with
 uncompressed messages and a `failed_unknown` log outcome.
 
 Streaming is forwarded incrementally with tool deltas and usage chunks intact.
-A client disconnect closes the backend response. An interrupted/malformed upstream
-stream ends without a synthetic `[DONE]`; it is logged as interrupted and never
-replayed. The maximum buffered request is configurable; a single SSE event or
-nonstream response is limited to 32 MiB.
+A completed stream ends with exactly one `data: [DONE]` frame. An interrupted or
+malformed upstream stream instead ends with exactly one sanitized terminal frame
+`data: {"error":{"message":"upstream_stream_interrupted","type":"gateway_error","code":"upstream_stream_interrupted"}}`
+and never a `[DONE]`, so clients must treat a missing `[DONE]` as truncation;
+the exchange is logged as interrupted and never replayed. A client disconnect
+closes the backend response. The maximum buffered request is configurable; a
+single SSE event or nonstream response is limited to 32 MiB.
 
 ## Observability
 
