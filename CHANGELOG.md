@@ -17,6 +17,11 @@ The version lives in `pyproject.toml` (`[project] version`).
   exactly one sanitized `{"event":"shutdown"}` record is emitted after release.
 - Emit a sanitized `startup_failed` JSON record for CLI argument errors instead
   of exiting with only argparse's unstructured stderr text.
+- `silence_dependency_logs` now returns a silencer that restores the previous
+  `logging.root.manager.disable` level when released. The CLI discards the
+  handle and keeps dependency logs off for its whole process, while the
+  in-process smoke and benchmark scripts restore their host process's logging
+  on exit.
 
 ## [0.4.0] - 2026-09-17
 

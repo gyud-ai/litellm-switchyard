@@ -79,7 +79,7 @@
     {
       "id": "SILENCE_LOGS",
       "symbol": "silence_dependency_logs",
-      "description": "Disables dependency logging process-wide so only gateway JSON events are observable.",
+      "description": "Scoped dependency-log suppression: disables logging at CRITICAL and restores the saved level when the returned silencer is released.",
       "group": 4,
       "role": "intermediary"
     },
@@ -687,9 +687,9 @@
       "target": "MAIN",
       "seq": 58,
       "kind": "note",
-      "outcome": "anomaly",
-      "phase": "anomaly",
-      "description": "logging.disable(CRITICAL) is process-global and never restored (logging.py:25-27)."
+      "outcome": "success",
+      "phase": "preflight",
+      "description": "silence_dependency_logs() captures the prior disable level and silences at CRITICAL; main discards the handle, so the CLI keeps dependency logs off for the process lifetime, and scoped callers restore on release (bootstrap.py:84; logging.py:DependencyLogSilencer)."
     },
     {
       "source": "UVICORN",

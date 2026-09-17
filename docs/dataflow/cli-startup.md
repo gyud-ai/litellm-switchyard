@@ -44,7 +44,7 @@ and owns every adapter.
 | `INGRESS_APP` | 2 | intermediary | `create_app` | FastAPI ingress factory storing the lifespan and resolving the Gateway from `app.state`. | `src/switchyard_gateway/adapters/ingress.py` |
 | `LOAD_CONFIG` | 4 | intermediary | `load_config` | JSONC parse, environment-reference resolution, and pydantic validation into Settings. | `src/switchyard_gateway/adapters/config.py` |
 | `JSON_EVENTS` | 4 | intermediary | `JsonEvents` | One-JSON-record-per-line stdout event sink with UTC timestamps. | `src/switchyard_gateway/adapters/logging.py` |
-| `SILENCE_LOGS` | 4 | intermediary | `silence_dependency_logs` | Disables dependency logging process-wide so only gateway JSON events are observable. | `src/switchyard_gateway/adapters/logging.py` |
+| `SILENCE_LOGS` | 4 | intermediary | `silence_dependency_logs` | Scoped dependency-log suppression: disables logging at `CRITICAL` and restores the saved level when the returned silencer is released. | `src/switchyard_gateway/adapters/logging.py` |
 | `HEADROOM` | 4 | intermediary | `HeadroomCompressor` | Compression adapter constructed inside the lifespan; registers its close on the lifespan's `AsyncExitStack`. | `src/switchyard_gateway/adapters/headroom.py` |
 | `SWITCHYARD` | 4 | intermediary | `SwitchyardRouter` | Tier-routing adapter over the pinned Switchyard SDK. | `src/switchyard_gateway/adapters/switchyard.py` |
 | `HTTPX_TRANSPORT` | 4 | intermediary | `HttpxTransport` | Single-attempt backend transport adapter over the pooled HTTPX client. | `src/switchyard_gateway/adapters/httpx.py` |
@@ -68,9 +68,13 @@ and owns every adapter.
    (`action="store_true"`) and calls `parse_args()` under a `SystemExit` guard
    (`bootstrap.py:75-83`). It receives back a `Namespace` with the parsed `Path`
    and boolean.
-3. (seq 4) `MAIN` calls `silence_dependency_logs()`, which runs
-   `logging.disable(logging.CRITICAL)` (`bootstrap.py:84`;
-   `adapters/logging.py:silence_dependency_logs`).
+3. (seq 4) `MAIN` calls `silence_dependency_logs()` (`bootstrap.py:84`;
+   `adapters/logging.py:silence_dependency_logs`). The call captures the
+   current `logging.root.manager.disable` value, runs
+   `logging.disable(logging.CRITICAL)`, and returns a `DependencyLogSilencer`
+   carrying the captured level. `MAIN` discards the handle, so dependency logs
+   stay silenced for the whole CLI process; in-process callers that use
+   `with silence_dependency_logs():` restore the captured level on exit.
 4. (seq 5) `MAIN` writes three telemetry switches into the process environment:
    `HEADROOM_BEACON=off`, `DO_NOT_TRACK=1`, `HEADROOM_TELEMETRY=off`
    (`bootstrap.py:85-87`).
@@ -155,18 +159,16 @@ by `tests/test_bootstrap.py:test_main_reports_bad_arguments_as_json` and
 
 ## Anomalies
 
-### Global logging disable is never restored
+### Resolved: global logging disable is scoped and restored
 
-_Covers:_ seq 58, `SILENCE_LOGS` → `MAIN` (outcome: anomaly)
-
-`silence_dependency_logs` calls `logging.disable(logging.CRITICAL)` and provides
-no counterpart to re-enable logging (`adapters/logging.py:25-27`). The side
-effect is process-global and permanent: any later library that logs through the
-`logging` module — including Uvicorn/Starlette internals that are not already
-suppressed by `log_config=None` — is muted for the life of the process. In the
-CLI this is intended, but the same helper is invoked from in-process scripts
-(`scripts/smoke.py:main`, `scripts/benchmark.py:main`), where it silently
-disables the host process's logging with no restoration.
+`silence_dependency_logs` now captures `logging.root.manager.disable`, silences
+at `CRITICAL`, and returns a `DependencyLogSilencer` whose release restores the
+captured level (`adapters/logging.py:DependencyLogSilencer`). The in-process
+scripts (`scripts/smoke.py:main`, `scripts/benchmark.py:main`) use the scoped
+`with` form, so a host process gets its logging back; the CLI discards the
+handle and keeps dependency logs off for its own process lifetime by design.
+Guarded by the scoped-silencing tests in `tests/test_events.py`. The seq 58 link
+records the resolved state as a success note.
 
 ### Resolved: argument errors bypassed the JSON event contract
 
@@ -199,10 +201,16 @@ leaves no pooled client and no executor to release (seq 59). Guarded by
   parsing (`json5.loads(..., allow_duplicate_keys=False)`), `_resolve` env
   handling, exception wrapping into sanitized `GatewayError`s, and
   `Config.settings()`.
-- `src/switchyard_gateway/adapters/logging.py:JsonEvents.emit` and
-  `silence_dependency_logs` — confirmed one-line JSON serialization to a
-  `TextIO` defaulting to `sys.stdout`, and the one-way `logging.disable`
-  side effect.
+- `src/switchyard_gateway/adapters/logging.py:JsonEvents.emit`,
+  `silence_dependency_logs`, and `DependencyLogSilencer` — confirmed one-line
+  JSON serialization to a `TextIO` defaulting to `sys.stdout`, the immediate
+  `logging.disable(logging.CRITICAL)` on first entry, and restoration of the
+  captured `logging.root.manager.disable` level on release, including when the
+  body raises.
+- `tests/test_events.py` (scoped-silencing tests) — pin scoped restore, the CLI
+  bare-call form, nested scopes and re-entered handles, release without entry,
+  exception restore, re-enabled logging after exit, and a Hypothesis property
+  over arbitrary prior disable levels.
 - `src/switchyard_gateway/adapters/headroom.py:HeadroomCompressor.__init__` —
   confirmed the eager `ThreadPoolExecutor(max_workers=1)` allocation now happens
   inside the lifespan.
@@ -249,14 +257,14 @@ leaves no pooled client and no executor to release (seq 59). Guarded by
   serialization limitation, not two sequential phases.
 - Adapter construction (seq 23-35) is ordered after `uvicorn.run` (seq 21)
   because it happens inside the ASGI lifespan, not in `build_app`.
-- Error links occupy seq 49-57 and the remaining anomaly link seq 58, after the
-  happy path, so outcome filters extract complete subgraphs without interleaving;
-  seq 59 is a success note recording the absent construction-before-ownership
-  window.
-- `note` is used for static import/dependency annotations (seq 47-48), for the
-  resolved ownership note (seq 59), and for the remaining anomaly finding
-  (seq 58); `event` is used for fire-and-forget writes to stdout and for the
-  LiteLLM-present signal (seq 49).
+- Error links occupy seq 49-57, after the happy path, so outcome filters extract
+  complete subgraphs without interleaving; seq 58 records the resolved
+  dependency-log silencing and seq 59 the absent construction-before-ownership
+  window, both as success notes.
+- `note` is used for static import/dependency annotations (seq 47-48) and for
+  the resolved logging (seq 58) and ownership (seq 59) notes; `event` is used
+  for fire-and-forget writes to stdout and for the LiteLLM-present signal
+  (seq 49).
 
 ## References
 
@@ -266,7 +274,7 @@ leaves no pooled client and no executor to release (seq 59). Guarded by
 - [README.md §Observability](README.md) — JSON records on stdout and dependency-log suppression.
 - [README.md §Verification](README.md) — the offline/container verification commands the startup path feeds.
 - [AGENTS.md](../../AGENTS.md) — contracts for LiteLLM absence, sanitized logs, and bootstrap ownership of adapter lifetimes.
-- [CHANGELOG.md](../../CHANGELOG.md) — the lifespan-ownership and JSON-contract fixes under Unreleased.
+- [CHANGELOG.md](../../CHANGELOG.md) — the lifespan-ownership, JSON-contract, and dependency-log-scope fixes under Unreleased.
 
 ### Related lifecycles
 
@@ -281,7 +289,7 @@ leaves no pooled client and no executor to release (seq 59). Guarded by
 - `src/switchyard_gateway/bootstrap.py:build_app` — shared composition and lifespan hinge.
 - `src/switchyard_gateway/adapters/config.py:load_config` — configuration load and validation.
 - `src/switchyard_gateway/adapters/logging.py:JsonEvents` — terminal JSON event sink.
-- `src/switchyard_gateway/adapters/logging.py:silence_dependency_logs` — process-global logging suppression.
+- `src/switchyard_gateway/adapters/logging.py:silence_dependency_logs` — dependency-log silencer with restore-on-release.
 - `src/switchyard_gateway/adapters/headroom.py:HeadroomCompressor` — compression adapter and worker thread.
 - `src/switchyard_gateway/adapters/ingress.py:create_app` — FastAPI app and lifespan ownership.
 - `pyproject.toml` — console-script declaration.
