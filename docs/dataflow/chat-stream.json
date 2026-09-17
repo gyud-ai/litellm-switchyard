@@ -120,14 +120,14 @@
     {
       "id": "SSE_BODY",
       "symbol": "sse_body",
-      "description": "Incremental SSE rewriter: buffers complete events, rewrites model to the alias, captures usage, and emits [DONE].",
+      "description": "Incremental SSE rewriter: buffers complete events, rewrites model to the alias, captures usage, emits [DONE] on completion, and emits a sanitized terminal error frame on interruption.",
       "group": 2,
       "role": "intermediary"
     },
     {
       "id": "OWNED_STREAM",
       "symbol": "OwnedStream.__call__",
-      "description": "ASGI StreamingResponse subclass whose finally block always finishes the exchange under a shielded cancel scope.",
+      "description": "ASGI StreamingResponse subclass whose finally block always finishes the exchange under a shielded cancel scope, labeling cancelled only when a CancelledError occurs.",
       "group": 2,
       "role": "intermediary"
     },
@@ -483,7 +483,7 @@
     {
       "source": "OWNED_STREAM",
       "target": "GATEWAY_FINISH",
-      "description": "gateway.finish(exchange, stream_outcome) in finally under anyio.CancelScope(shield=True)",
+      "description": "gateway.finish(exchange, recorded stream_outcome or interrupted default) in finally under anyio.CancelScope(shield=True)",
       "seq": 38,
       "kind": "call",
       "outcome": "success",
@@ -753,7 +753,7 @@
     {
       "source": "SSE_BODY",
       "target": "CLIENT",
-      "description": "upstream read or parse failure is swallowed: the generator returns and the stream ends without [DONE]",
+      "description": "upstream read or parse failure yields one sanitized upstream_stream_interrupted terminal frame; [DONE] is never emitted",
       "seq": 80,
       "kind": "event",
       "outcome": "anomaly",
@@ -762,7 +762,7 @@
     {
       "source": "SSE_BODY",
       "target": "OWNED_STREAM",
-      "description": "silent generator return with stream_outcome recorded as interrupted",
+      "description": "generator returns with stream_outcome recorded as interrupted",
       "seq": 81,
       "kind": "return",
       "outcome": "anomaly",
@@ -771,9 +771,18 @@
     {
       "source": "GATEWAY_FINISH",
       "target": "EVENTS",
-      "description": "terminal event records outcome=interrupted while no error frame or [DONE] reached the client",
+      "description": "terminal event records outcome=interrupted after the error frame and no [DONE] reached the client",
       "seq": 82,
       "kind": "event",
+      "outcome": "anomaly",
+      "phase": "anomaly"
+    },
+    {
+      "source": "OWNED_STREAM",
+      "target": "GATEWAY_FINISH",
+      "description": "outcome-less abnormal exit with no CancelledError defaults to interrupted, never cancelled",
+      "seq": 83,
+      "kind": "call",
       "outcome": "anomaly",
       "phase": "anomaly"
     },

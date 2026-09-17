@@ -12,6 +12,16 @@ from switchyard_gateway.domain import GatewayError
 
 pytestmark = pytest.mark.integration
 
+_DONE_FRAME = "data: [DONE]"
+_INTERRUPTED_FRAME = (
+    'data: {"error":{"message":"upstream_stream_interrupted",'
+    '"type":"gateway_error","code":"upstream_stream_interrupted"}}'
+)
+
+
+def _data_frames(response: httpx.Response) -> list[str]:
+    return [line for line in response.text.splitlines() if line.startswith("data: ")]
+
 
 class TestChatIngress:
     async def test_alias_extensions_and_usage(self, gateway, request_body):
@@ -169,6 +179,7 @@ class TestStreams:
         assert values[0]["choices"] == delta["choices"]
         assert all(value["model"] == "switchyard" for value in values)
         assert response.text.endswith("data: [DONE]\n\n")
+        assert response.text.count(_DONE_FRAME) == 1
         assert upstream.closed
         assert gateway.events.records[-1]["outcome"] == "completed"
         assert gateway.events.records[-1]["usage"] == {"total_tokens": 12}
@@ -185,7 +196,10 @@ class TestStreams:
                 json=request_body | {"stream": True},
                 headers={"authorization": "Bearer client-key"},
             )
+        frames = _data_frames(response)
         assert "[DONE]" not in response.text
+        assert frames.count(_INTERRUPTED_FRAME) == 1
+        assert frames[-1] == _INTERRUPTED_FRAME
         assert upstream.closed
         assert len(gateway.transport.calls) == 1
         assert gateway.events.records[-1]["outcome"] == "interrupted"
@@ -199,11 +213,13 @@ class TestStreams:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=create_app(gateway)), base_url="http://gateway"
         ) as client:
-            await client.post(
+            response = await client.post(
                 "/v1/chat/completions",
                 json=request_body | {"stream": True},
                 headers={"authorization": "Bearer client-key"},
             )
+        frames = _data_frames(response)
+        assert frames == ['data: {"choices":[]}', _INTERRUPTED_FRAME]
         assert upstream.closed
         assert len(gateway.transport.calls) == 1
         assert gateway.events.records[-1]["outcome"] == "interrupted"

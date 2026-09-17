@@ -43,11 +43,11 @@ are placed in group 3, the closest fit in this legend.
 
 | Lifecycle | Entry point | Location | Graph | Nodes / links |
 | --- | --- | --- | --- | --- |
-| Health check | `GET /health/liveliness`, `GET /health/readiness` | [ingress.py:195](../../src/switchyard_gateway/adapters/ingress.py) `create_app.health` | [health-check.json](health-check.json) · [md](health-check.md) | 5 / 7 |
-| Model discovery | `GET /v1/models` | [ingress.py:199](../../src/switchyard_gateway/adapters/ingress.py) `create_app.models` | [model-discovery.json](model-discovery.json) · [md](model-discovery.md) | 12 / 24 |
-| Chat completion (JSON) | `POST /v1/chat/completions` | [ingress.py:219](../../src/switchyard_gateway/adapters/ingress.py) `create_app.chat` | [chat-completion.json](chat-completion.json) · [md](chat-completion.md) | 18 / 78 |
-| Chat completion (SSE) | `POST /v1/chat/completions` with `stream: true` | [ingress.py:219](../../src/switchyard_gateway/adapters/ingress.py) `create_app.chat` → `sse_body` / `OwnedStream` | [chat-stream.json](chat-stream.json) · [md](chat-stream.md) | 20 / 75 |
-| Application lifespan | FastAPI lifespan enter/exit | [bootstrap.py:28](../../src/switchyard_gateway/bootstrap.py) `build_app.lifespan` | [app-lifespan.json](app-lifespan.json) · [md](app-lifespan.md) | 15 / 52 |
+| Health check | `GET /health/liveliness`, `GET /health/readiness` | [ingress.py:203](../../src/switchyard_gateway/adapters/ingress.py) `create_app.health` | [health-check.json](health-check.json) · [md](health-check.md) | 5 / 7 |
+| Model discovery | `GET /v1/models` | [ingress.py:207](../../src/switchyard_gateway/adapters/ingress.py) `create_app.models` | [model-discovery.json](model-discovery.json) · [md](model-discovery.md) | 12 / 24 |
+| Chat completion (JSON) | `POST /v1/chat/completions` | [ingress.py:227](../../src/switchyard_gateway/adapters/ingress.py) `create_app.chat` | [chat-completion.json](chat-completion.json) · [md](chat-completion.md) | 18 / 78 |
+| Chat completion (SSE) | `POST /v1/chat/completions` with `stream: true` | [ingress.py:227](../../src/switchyard_gateway/adapters/ingress.py) `create_app.chat` → `sse_body` / `OwnedStream` | [chat-stream.json](chat-stream.json) · [md](chat-stream.md) | 20 / 76 |
+| Application lifespan | FastAPI lifespan enter/exit | [bootstrap.py:29](../../src/switchyard_gateway/bootstrap.py) `build_app.lifespan` | [app-lifespan.json](app-lifespan.json) · [md](app-lifespan.md) | 15 / 52 |
 | CLI startup | `switchyard-gateway [--config] [--check]` | [bootstrap.py:73](../../src/switchyard_gateway/bootstrap.py) `main` | [cli-startup.json](cli-startup.json) · [md](cli-startup.md) | 23 / 59 |
 
 Out of scope: `scripts/smoke.py`, `scripts/container_smoke.py`, and
@@ -66,11 +66,11 @@ authoritative and cites the code.
 
 ### Failures swallowed or hidden from the caller
 
-- [chat-stream](chat-stream.md) — `ingress.py:sse_body` catches `Exception`,
-  records `interrupted`, and returns with no `[DONE]` or error frame; the client
-  sees a clean EOF. Cancellation is recorded but never reaches the client, and
-  `OwnedStream.__call__`'s `pop("stream_outcome", "cancelled")` mislabels an
-  outcome-less abnormal exit as cancellation.
+- [chat-stream](chat-stream.md) — a mid-stream upstream failure ends the SSE
+  body with one sanitized `upstream_stream_interrupted` frame instead of a clean
+  EOF, but the cause is collapsed into that single client-visible code.
+  Cancellation is recorded but never reaches the client, and any outcome-less
+  abnormal exit now defaults to `interrupted` rather than `cancelled`.
 - [chat-completion](chat-completion.md) — `application.py:Gateway.finish`
   closes the upstream before emitting; if the close raises, the event is logged
   `completed` and the exception replaces the already-built JSON response.

@@ -22,6 +22,11 @@ The version lives in `pyproject.toml` (`[project] version`).
   handle and keeps dependency logs off for its whole process, while the
   in-process smoke and benchmark scripts restore their host process's logging
   on exit.
+- Streaming ends an interrupted or malformed upstream stream with exactly one
+  sanitized `upstream_stream_interrupted` SSE error frame and never a synthetic
+  `[DONE]`, so clients can distinguish truncation from completion.
+- Streaming records abnormal exits as `interrupted` by default; `cancelled` is
+  recorded only when a cancellation actually occurs.
 
 ## [0.4.0] - 2026-09-17
 
