@@ -79,6 +79,20 @@ class TestChatIngress:
                 "expensive",
             ]
 
+    async def test_unauthenticated_chat_is_rejected_with_an_event(self, gateway, request_body):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(gateway)), base_url="http://gateway"
+        ) as client:
+            response = await client.post("/v1/chat/completions", json=request_body)
+        assert response.status_code == 401
+        assert response.json()["error"]["code"] == "unauthorized"
+        assert gateway.transport.calls == []
+        event = gateway.events.records[-1]
+        assert event["event"] == "request"
+        assert event["status"] == 401
+        assert event["outcome"] == "rejected"
+        assert event["error"] == "unauthorized"
+
     async def test_upstream_error_body_not_exposed(self, gateway, request_body):
         upstream = Response(400, [b'{"error":"https://private-host credential"}'])
         gateway.transport.responses = [upstream]

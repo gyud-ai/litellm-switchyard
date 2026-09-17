@@ -2,199 +2,199 @@
 
 # cli-startup. CLI Startup and Worker Launch
 
-The `switchyard-gateway` console script parses its arguments, refuses to run in a
-LiteLLM-contaminated interpreter, loads and validates a JSONC configuration into
-frozen `Settings`, and either exits after `--check` validation or wires the
-adapters and starts a single Uvicorn worker that emits a `startup` event over the
-ASGI lifespan.
+The `switchyard-gateway` console script parses its arguments under a `SystemExit`
+guard so a malformed invocation still emits a sanitized JSON `startup_failed`
+record, refuses to run in a LiteLLM-contaminated interpreter, loads and validates
+a JSONC configuration into frozen `Settings`, and either exits after `--check`
+validation or hands an app to a single Uvicorn worker whose lifespan constructs
+and owns every adapter.
 
 - **Entry point:** `switchyard_gateway.bootstrap:main`, exposed as the
   `switchyard-gateway` console script in `pyproject.toml`
 - **Trigger:** an operator runs the console script from a shell, a Compose
   service, or a container entrypoint
-- **Termination:** `STDOUT` (sink) for the `--check` and `startup` records,
-  `UVICORN` (sink) for the running worker, and `STDERR` (dead-end) for
-  argument-parsing failures
+- **Termination:** `STDOUT` (sink) for the `configuration_valid`, `startup`,
+  `shutdown`, and `startup_failed` records; `UVICORN` (sink) for the running
+  worker. `STDERR` (dead-end) still receives the argparse usage text for a
+  malformed invocation, now alongside the JSON record.
 - **Response:**
   - **Success:** `--check` prints `{"event":"configuration_valid"}` and exits 0;
-    the server path prints `{"event":"startup",...}` and serves on `host:port`
+    the server path prints `{"event":"startup",...}`, serves on `host:port`, and
+    prints exactly one `{"event":"shutdown"}` on orderly teardown
   - **Failure:** `{"event":"startup_failed","error":"<sanitized_code>"}` on
-    stdout followed by exit code 1
-  - **Exception:** an argparse usage error exits 2 on stderr without a JSON
-    record; an unhandled Uvicorn start failure propagates as a traceback after
-    `build_app` has already allocated resources
+    stdout followed by exit code 1 for configuration failures; argument errors
+    emit `{"event":"startup_failed","error":"invalid_arguments"}` and preserve
+    argparse's exit code 2
+  - **Exception:** an unhandled Uvicorn start failure aborts with a traceback,
+    but no adapter resource exists until the lifespan is entered, so nothing
+    leaks; a lifecycle emit failure inside the lifespan releases every adapter
+    before propagating
 
 ## Participants
 
 | Node ID | Group | Role | Symbol | What | Location |
 | --- | --- | --- | --- | --- | --- |
 | `OPERATOR` | 1 | initiator | `switchyard-gateway` | Operator invoking the console script with --config and optionally --check. | `pyproject.toml` |
-| `MAIN` | 3 | intermediary | `main` | Composition-root CLI entry point: parses arguments, guards LiteLLM, loads config, starts one Uvicorn worker. | `src/switchyard_gateway/bootstrap.py` |
-| `ARG_PARSER` | 3 | intermediary | `argparse.ArgumentParser` | --config (Path, default config.jsonc) and --check argument parsing. | `src/switchyard_gateway/bootstrap.py` |
+| `MAIN` | 3 | intermediary | `main` | Composition-root CLI entry: parses arguments under a SystemExit guard, guards LiteLLM, loads config, starts one Uvicorn worker. | `src/switchyard_gateway/bootstrap.py` |
+| `ARG_PARSER` | 3 | intermediary | `argparse.ArgumentParser` | --config (Path, default config.jsonc) and --check argument parsing; usage errors exit 2 on stderr. | `src/switchyard_gateway/bootstrap.py` |
 | `LITELLM_GUARD` | 3 | intermediary | `importlib.util.find_spec` | Preflight check that refuses an environment where litellm is importable. | `src/switchyard_gateway/bootstrap.py` |
-| `BUILD_APP` | 3 | intermediary | `build_app` | Wires concrete adapters and returns the FastAPI app together with its lifespan. | `src/switchyard_gateway/bootstrap.py` |
-| `GATEWAY` | 3 | intermediary | `Gateway` | Application orchestration core constructed from settings and injected ports. | `src/switchyard_gateway/application.py` |
-| `LIFESPAN` | 3 | intermediary | `lifespan` | Async context manager emitting the startup event and closing client/compressor on shutdown. | `src/switchyard_gateway/bootstrap.py` |
-| `INGRESS_APP` | 2 | intermediary | `create_app` | FastAPI ingress app factory that stores the lifespan and route handlers. | `src/switchyard_gateway/adapters/ingress.py` |
+| `BUILD_APP` | 3 | intermediary | `build_app` | Composes the event sink and the app whose lifespan constructs and owns every adapter. | `src/switchyard_gateway/bootstrap.py` |
+| `GATEWAY` | 3 | intermediary | `Gateway` | Application orchestration core constructed by the lifespan and installed on `app.state`. | `src/switchyard_gateway/application.py` |
+| `LIFESPAN` | 3 | intermediary | `lifespan` | Async context manager constructing adapters on an `AsyncExitStack`, emitting startup and one shutdown record. | `src/switchyard_gateway/bootstrap.py` |
+| `INGRESS_APP` | 2 | intermediary | `create_app` | FastAPI ingress factory storing the lifespan and resolving the Gateway from `app.state`. | `src/switchyard_gateway/adapters/ingress.py` |
 | `LOAD_CONFIG` | 4 | intermediary | `load_config` | JSONC parse, environment-reference resolution, and pydantic validation into Settings. | `src/switchyard_gateway/adapters/config.py` |
 | `JSON_EVENTS` | 4 | intermediary | `JsonEvents` | One-JSON-record-per-line stdout event sink with UTC timestamps. | `src/switchyard_gateway/adapters/logging.py` |
 | `SILENCE_LOGS` | 4 | intermediary | `silence_dependency_logs` | Disables dependency logging process-wide so only gateway JSON events are observable. | `src/switchyard_gateway/adapters/logging.py` |
-| `HEADROOM` | 4 | intermediary | `HeadroomCompressor` | Compression adapter that eagerly allocates a single compression worker thread. | `src/switchyard_gateway/adapters/headroom.py` |
+| `HEADROOM` | 4 | intermediary | `HeadroomCompressor` | Compression adapter constructed inside the lifespan; registers its close on the lifespan's `AsyncExitStack`. | `src/switchyard_gateway/adapters/headroom.py` |
 | `SWITCHYARD` | 4 | intermediary | `SwitchyardRouter` | Tier-routing adapter over the pinned Switchyard SDK. | `src/switchyard_gateway/adapters/switchyard.py` |
 | `HTTPX_TRANSPORT` | 4 | intermediary | `HttpxTransport` | Single-attempt backend transport adapter over the pooled HTTPX client. | `src/switchyard_gateway/adapters/httpx.py` |
-| `HTTPX_CLIENT` | 4 | intermediary | `httpx.AsyncClient` | Pooled HTTP client constructed in build_app and owned until lifespan shutdown. | `src/switchyard_gateway/bootstrap.py` |
+| `HTTPX_CLIENT` | 4 | intermediary | `httpx.AsyncClient` | Pooled HTTP client constructed inside the lifespan and owned until its `AsyncExitStack` releases it. | `src/switchyard_gateway/bootstrap.py` |
 | `SWITCHYARD_SDK` | 5 | intermediary | `switchyard.libsy.algorithms` | Pinned vendor tier-routing SDK imported by the Switchyard adapter. | `src/switchyard_gateway/adapters/switchyard.py` |
 | `HEADROOM_SDK` | 5 | intermediary | `headroom.compress` | Pinned vendor structural-compression SDK imported by the Headroom adapter. | `src/switchyard_gateway/adapters/headroom.py` |
 | `CONFIG_FILE` | 7 | intermediary | `config.jsonc` | JSONC configuration document read from disk. | `config.example.jsonc` |
 | `ENV` | 7 | intermediary | `os.environ` | Process environment holding telemetry switches and JSONC-resolved secrets/backend URLs. | `src/switchyard_gateway/bootstrap.py` |
 | `STDOUT` | 7 | sink | `sys.stdout` | JSON event stream consumed by the operator and container log collector. | `src/switchyard_gateway/adapters/logging.py` |
-| `STDERR` | 7 | dead-end | `sys.stderr` | argparse usage output for malformed invocations, which bypasses the JSON event contract. | `src/switchyard_gateway/bootstrap.py` |
+| `STDERR` | 7 | dead-end | `sys.stderr` | argparse usage and error text for malformed invocations; a structured startup_failed record is emitted on stdout alongside it. | `src/switchyard_gateway/bootstrap.py` |
 | `UVICORN` | 7 | sink | `uvicorn.run` | Single-worker ASGI server that terminates the startup path and owns the event loop. | `src/switchyard_gateway/bootstrap.py` |
-| `THREAD_POOL` | 7 | intermediary | `ThreadPoolExecutor` | Compression execution thread owned by HeadroomCompressor, allocated at construction time. | `src/switchyard_gateway/adapters/headroom.py` |
+| `THREAD_POOL` | 7 | intermediary | `ThreadPoolExecutor` | Compression execution thread owned by HeadroomCompressor, created when the lifespan constructs it. | `src/switchyard_gateway/adapters/headroom.py` |
 
 ## Sequence
 
 1. (seq 1) `OPERATOR` invokes the `switchyard-gateway` console script
    (`pyproject.toml` `[project.scripts]` maps it to
    `switchyard_gateway.bootstrap:main`).
-2. (seq 2, 3) `MAIN` builds an `argparse.ArgumentParser` with `--config`
+2. (seq 2-3) `MAIN` builds an `argparse.ArgumentParser` with `--config`
    (`type=Path`, default `Path("config.jsonc")`) and `--check`
-   (`action="store_true"`) and calls `parse_args()`
-   (`bootstrap.py:main`). It receives back a `Namespace` with the parsed `Path`
+   (`action="store_true"`) and calls `parse_args()` under a `SystemExit` guard
+   (`bootstrap.py:75-83`). It receives back a `Namespace` with the parsed `Path`
    and boolean.
 3. (seq 4) `MAIN` calls `silence_dependency_logs()`, which runs
-   `logging.disable(logging.CRITICAL)` (`adapters/logging.py:silence_dependency_logs`).
+   `logging.disable(logging.CRITICAL)` (`bootstrap.py:84`;
+   `adapters/logging.py:silence_dependency_logs`).
 4. (seq 5) `MAIN` writes three telemetry switches into the process environment:
    `HEADROOM_BEACON=off`, `DO_NOT_TRACK=1`, `HEADROOM_TELEMETRY=off`
-   (`bootstrap.py:main`).
-5. (seq 6, 7) Inside a `try`, `MAIN` calls `importlib.util.find_spec("litellm")`
+   (`bootstrap.py:85-87`).
+5. (seq 6-7) Inside a `try`, `MAIN` calls `importlib.util.find_spec("litellm")`
    and requires it to return `None`; a non-`None` spec raises
    `GatewayError("litellm_must_not_be_installed", 500)`
-   (`bootstrap.py:main`).
-6. (seq 8–13) `MAIN` calls `load_config(args.config)`
+   (`bootstrap.py:89-90`).
+6. (seq 8-13) `MAIN` calls `load_config(args.config)`
    (`adapters/config.py:load_config`). `LOAD_CONFIG` reads the JSONC text via
    `Path.read_text()` (`CONFIG_FILE`), resolves complete-value `{"env": NAME}`
    references through `_resolve` against `os.environ` (`ENV`), rejects a missing
    or empty variable with `GatewayError("missing_configuration_environment", 500)`,
    and validates the document with `Config.model_validate(...).settings()`
-   (pydantic models `StrictConfig`, `EndpointConfig`, `ModelConfig`,
-   `PairConfig`, `StageConfig`, `CompressionConfig`, `ServerConfig`, `Config`).
-   It returns a frozen `Settings`.
-7. (seq 14–16) **Alternate terminal, only when `args.check` is set.** `MAIN`
+   (`adapters/config.py:189-197`). It returns a frozen `Settings`.
+7. (seq 14-16) **Alternate terminal, only when `args.check` is set.** `MAIN`
    emits `{"event":"configuration_valid"}` through a fresh `JsonEvents`, which
    writes and flushes one JSON line to `STDOUT`, then returns without starting a
-   server (`bootstrap.py:main`). These steps share a prefix with and never occur
-   alongside the server path that follows.
-8. (seq 17–32) On the server path, `MAIN` calls `build_app(settings)`
-   (`bootstrap.py:build_app`). `BUILD_APP` constructs the pooled
-   `httpx.AsyncClient` (`timeout`, `follow_redirects=False`, `trust_env=False`),
-   the `HeadroomCompressor` (which eagerly creates its single-worker
-   `ThreadPoolExecutor`), the `SwitchyardRouter`, and the `HttpxTransport`; it
-   composes them into `Gateway(settings, router, compressor, transport, events)`
-   and passes that plus the `lifespan` closure to `create_app`, receiving the
-   `FastAPI` app.
-9. (seq 33–38) `MAIN` calls `uvicorn.run(build_app(settings), host=...,
-   port=..., workers=1, access_log=False, log_config=None)`
-   (`bootstrap.py:main`). Uvicorn enters ASGI lifespan startup, which invokes
-   `LIFESPAN`; `LIFESPAN` emits
-   `{"event":"startup","models":N,"pairs":M}` through `JSON_EVENTS` to `STDOUT`,
-   then yields and the server binds `settings.host:settings.port`, remaining
-   open until shutdown (`bootstrap.py:lifespan`). The same `build_app` is the
-   shared hinge between this CLI path and the app-lifespan path: `create_app`
-   stores the lifespan it is handed (`adapters/ingress.py:create_app`).
+   server (`bootstrap.py:95-97`).
+8. (seq 17-20) On the server path, `MAIN` calls `build_app(settings)`
+   (`bootstrap.py:99`). `BUILD_APP` creates the `JsonEvents` sink, calls
+   `create_app(lifespan=lifespan)` (`bootstrap.py:70`), and returns the FastAPI
+   app. No client, executor, router, transport, or Gateway exists yet: the
+   lifespan it records will construct them (seq 23-34).
+9. (seq 21-40) `MAIN` calls `uvicorn.run(app, host=..., port=..., workers=1,
+   access_log=False, log_config=None)` (`bootstrap.py:98-105`). Uvicorn enters
+   ASGI lifespan startup, which invokes `LIFESPAN`; `LIFESPAN` constructs the
+   pooled `httpx.AsyncClient`, the `HeadroomCompressor` (creating the
+   single-worker `ThreadPoolExecutor`), the `SwitchyardRouter`, the
+   `HttpxTransport`, and the `Gateway`, installing the gateway on `app.state`
+   (seq 23-35). It then emits
+   `{"event":"startup","models":N,"pairs":M}` through `JSON_EVENTS` to `STDOUT`
+   (`bootstrap.py:56-62`), and startup completes (seq 36-40).
+10. (seq 41-45) On shutdown the lifespan resumes: the `AsyncExitStack` releases
+    the compressor and then the client (seq 41), emits exactly one
+    `{"event":"shutdown"}` record after release (seq 42-44), and the context
+    exits (seq 45).
+11. (seq 46) `uvicorn.run` returns to `MAIN`; the process falls through to exit.
 
 ## Error paths
 
 ### LiteLLM is importable
 
-_Covers:_ seq 39, `LITELLM_GUARD` → `MAIN` (outcome: error)
+_Covers:_ seq 49, `LITELLM_GUARD` → `MAIN` (outcome: error)
 
 `importlib.util.find_spec("litellm")` returning a spec means a LiteLLM install
 contaminated the pinned environment. `main` raises
 `GatewayError("litellm_must_not_be_installed", 500)` before any config is read
-(`bootstrap.py:main`, lines 62–63).
+(`bootstrap.py:89-90`).
 
 ### Configuration is invalid or an environment reference is missing
 
-_Covers:_ seq 40, `LOAD_CONFIG` → `MAIN` (outcome: error)
+_Covers:_ seq 50, `LOAD_CONFIG` → `MAIN` (outcome: error)
 
 `load_config` wraps `OSError`, `ValueError`, `TypeError`, and pydantic
 `ValidationError` into `GatewayError("invalid_configuration", 500)` without
-echoing values (`adapters/config.py:load_config`, line 196). `_resolve` raises
+echoing values (`adapters/config.py:189-197`). `_resolve` raises
 `GatewayError("missing_configuration_environment", 500)` when a referenced
-variable is unset or empty (`adapters/config.py:_resolve`, line 181). Both
-propagate out of the `try` block in `main`.
+variable is unset or empty (`adapters/config.py:176-186`).
 
 ### Sanitized startup_failed and non-zero exit
 
-_Covers:_ seq 41, `MAIN` → `JSON_EVENTS` (outcome: error); seq 42, `JSON_EVENTS` → `STDOUT` (outcome: error); seq 43, `MAIN` → `OPERATOR` (outcome: error)
+_Covers:_ seq 51, `MAIN` → `JSON_EVENTS` (outcome: error); seq 52, `JSON_EVENTS` → `STDOUT` (outcome: error); seq 53, `MAIN` → `OPERATOR` (outcome: error)
 
 The single `except GatewayError` in `main` receives every failure above, emits
 `{"event":"startup_failed","error":error.code}` through a new `JsonEvents`, and
 raises `SystemExit(1) from None` so no dependency traceback leaks
-(`bootstrap.py:main`, lines 65–67). The operator sees one JSON record on stdout
-and exit code 1; no `startup` event is emitted and no server binds.
+(`bootstrap.py:92-94`). The operator sees one JSON record on stdout and exit code
+1; no `startup` event is emitted and no server binds.
+
+### Argument errors emit a sanitized JSON record
+
+_Covers:_ seq 54, `ARG_PARSER` → `MAIN` (outcome: error); seq 55, `ARG_PARSER` → `STDERR` (outcome: error); seq 56, `MAIN` → `JSON_EVENTS` (outcome: error); seq 57, `MAIN` → `OPERATOR` (outcome: error)
+
+`parser.parse_args()` now runs inside a `try` that catches `SystemExit`
+(`bootstrap.py:78-83`). An unknown flag or malformed option makes argparse print
+its usage/error text to `STDERR` and raise `SystemExit(2)` (seq 54-55); `main`
+emits `{"event":"startup_failed","error":"invalid_arguments"}` on stdout
+(seq 56) and re-raises, preserving the argparse status (seq 57). `--help` exits 0
+with no failure record because only non-zero exit codes emit the event. Guarded
+by `tests/test_bootstrap.py:test_main_reports_bad_arguments_as_json` and
+`tests/test_bootstrap.py:test_main_help_exits_cleanly_without_a_failure_event`.
 
 ## Anomalies
 
-### Argument errors bypass the JSON event contract
-
-_Covers:_ seq 44, `ARG_PARSER` → `STDERR` (outcome: anomaly)
-
-`parser.parse_args()` runs before the `try`/`except GatewayError` block
-(`bootstrap.py:main`, lines 56 and 61). An unknown flag or a malformed `--config`
-value therefore makes argparse print usage to `STDERR` and exit 2
-(`bootstrap.py:ARG_PARSER`), which is a present-but-off-contract path: the
-lifecycle's advertised failure surface is a JSON `startup_failed` record, but
-this class of operator error never produces one, and `STDERR` is never routed
-through `JsonEvents`. An operator or log shipper parsing only stdout JSON will
-see the process vanish with no gateway-owned terminal record.
-
 ### Global logging disable is never restored
 
-_Covers:_ seq 45, `SILENCE_LOGS` → `MAIN` (outcome: anomaly)
+_Covers:_ seq 58, `SILENCE_LOGS` → `MAIN` (outcome: anomaly)
 
 `silence_dependency_logs` calls `logging.disable(logging.CRITICAL)` and provides
-no counterpart to re-enable logging (`adapters/logging.py:silence_dependency_logs`,
-lines 25–27). The side effect is process-global and permanent: any later library
-that logs through the `logging` module — including Uvicorn/Starlette internals
-that are not already suppressed by `log_config=None` — is muted for the life of
-the process. In the CLI this is intended, but the same helper is invoked from
-in-process scripts (`scripts/smoke.py:main`, `scripts/benchmark.py:main`), where
-it silently disables the host process's logging with no restoration.
+no counterpart to re-enable logging (`adapters/logging.py:25-27`). The side
+effect is process-global and permanent: any later library that logs through the
+`logging` module — including Uvicorn/Starlette internals that are not already
+suppressed by `log_config=None` — is muted for the life of the process. In the
+CLI this is intended, but the same helper is invoked from in-process scripts
+(`scripts/smoke.py:main`, `scripts/benchmark.py:main`), where it silently
+disables the host process's logging with no restoration.
 
-### Uvicorn start failure skips lifespan cleanup
+### Resolved: argument errors bypassed the JSON event contract
 
-_Covers:_ seq 46, `MAIN` → `HTTPX_CLIENT` (outcome: anomaly)
+The `SystemExit` guard around `parse_args` now emits
+`{"event":"startup_failed","error":"invalid_arguments"}` before re-raising
+(`bootstrap.py:78-83`), so malformed invocations produce a structured stdout
+record even though argparse's usage text still goes to `STDERR` (seq 54-57).
 
-`build_app` allocates the `httpx.AsyncClient` and the `HeadroomCompressor`
-(which eagerly creates its `ThreadPoolExecutor` at construction,
-`adapters/headroom.py:HeadroomCompressor.__init__`, line 18) before
-`uvicorn.run` is called. The only orderly cleanup is inside the lifespan's
-`finally`, which awaits `client.aclose()` and `compressor.close()`
-(`bootstrap.py:lifespan`, lines 44–46) — but that body runs only after Uvicorn
-has successfully started the app. `main` wraps neither `uvicorn.run` nor
-`build_app` in cleanup (`bootstrap.py:main`, lines 71–78), so a bind/start
-failure (for example the configured port already in use) aborts the process with
-a traceback while the pooled client and compression executor are never closed
-through their owning composition root. Process exit reclaims the OS handles, so
-the durable consequence is a missing orderly-shutdown step and an absent
-operator-facing terminal event rather than a leak across restarts.
+### Resolved: Uvicorn start failure skipped lifespan cleanup
+
+`build_app` no longer allocates the client or the compressor. The lifespan
+constructs and registers them once the server enters it, so a bind/start failure
+leaves no pooled client and no executor to release (seq 59). Guarded by
+`tests/test_bootstrap.py:test_main_start_failure_constructs_no_adapters` and
+`tests/test_bootstrap.py:test_build_app_defers_adapter_construction_until_lifespan`.
 
 ## Verification
 
 - `src/switchyard_gateway/bootstrap.py:main` — confirmed argparse options
-  `--config`/`--check`, the ordering of `silence_dependency_logs`, the three
-  telemetry env writes, the `find_spec("litellm")` guard, the
-  `except GatewayError` handler emitting `startup_failed` + `SystemExit(1)`, the
-  `--check` `configuration_valid` emit, and
+  `--config`/`--check` parsed under `except SystemExit` with a non-zero-code
+  check, the ordering of `silence_dependency_logs`, the three telemetry env
+  writes, the `find_spec("litellm")` guard, the `except GatewayError` handler
+  emitting `startup_failed` + `SystemExit(1)`, the `--check`
+  `configuration_valid` emit, and
   `uvicorn.run(..., workers=1, access_log=False, log_config=None)`.
-- `src/switchyard_gateway/bootstrap.py:build_app` — confirmed construction of
-  `httpx.AsyncClient`, `HeadroomCompressor`, `SwitchyardRouter`,
-  `HttpxTransport`, `Gateway`, and `create_app`, and the startup/shutdown events
-  in `lifespan`.
-- `src/switchyard_gateway/bootstrap.py:lifespan` — confirmed the `startup` event
-  payload and the `try/finally` that closes the client and compressor.
+- `src/switchyard_gateway/bootstrap.py:build_app` — confirmed only `JsonEvents`
+  and the app are created; the client, compressor, router, transport, and
+  Gateway are constructed by the lifespan and registered on an `AsyncExitStack`.
 - `src/switchyard_gateway/adapters/config.py:load_config` — confirmed JSONC
   parsing (`json5.loads(..., allow_duplicate_keys=False)`), `_resolve` env
   handling, exception wrapping into sanitized `GatewayError`s, and
@@ -204,16 +204,16 @@ operator-facing terminal event rather than a leak across restarts.
   `TextIO` defaulting to `sys.stdout`, and the one-way `logging.disable`
   side effect.
 - `src/switchyard_gateway/adapters/headroom.py:HeadroomCompressor.__init__` —
-  confirmed the eager `ThreadPoolExecutor(max_workers=1)` allocation.
+  confirmed the eager `ThreadPoolExecutor(max_workers=1)` allocation now happens
+  inside the lifespan.
 - `src/switchyard_gateway/adapters/ingress.py:create_app` — confirmed the
-  lifespan is stored on the FastAPI app, making it the shared CLI/app hinge.
-- `pyproject.toml [project.scripts]` and `Dockerfile` `ENTRYPOINT`/`CMD` —
-  confirmed the console-script entry point and the container invocation
-  (`--config /app/config.jsonc`).
+  lifespan is stored on the FastAPI app and handlers resolve the Gateway from
+  `app.state`, making the lifespan the shared CLI/app hinge.
+- `tests/test_bootstrap.py` (unit) — invokes `main` for bad arguments, `--help`,
+  configuration failure, the LiteLLM guard, `--check`, the default config path,
+  uvicorn kwargs, and a failing `uvicorn.run`.
 - `scripts/smoke.py:main` and `scripts/container_smoke.py:main` — confirmed the
-  offline startup/readiness behavior; `tests/test_config_architecture.py` pins
-  config error sanitization and JSON event line shape; no test currently invokes
-  `bootstrap.main`, `build_app`, or the `--check` branch.
+  offline startup/readiness behavior; no test tier starts a real server.
 
 ## Serialization notes
 
@@ -237,20 +237,26 @@ operator-facing terminal event rather than a leak across restarts.
   incoming return edges rather than declared.
 - `STDOUT` and `UVICORN` are `sink`: they are the intended server-side
   terminations (the JSON response surface and the running worker).
-- `STDERR` is `dead-end`: malformed invocations terminate there without the
-  intended JSON response.
+- `STDERR` remains `dead-end`: argparse usage text terminates there, but the
+  malformed invocation is no longer off-contract because `MAIN` emits the
+  `startup_failed` record on stdout (seq 56).
 
 ### Seq ordering and kind mapping
 
-- The `--check` branch (seq 14–16) and the server branch (seq 17–38) are
+- The `--check` branch (seq 14-16) and the server branch (seq 17-46) are
   mutually exclusive but share one total order; the `--check` short-circuit is
   placed first because it terminates earliest. This exclusivity is a
   serialization limitation, not two sequential phases.
-- Error links occupy seq 39–43 and anomaly links seq 44–46, after the happy
-  path, so outcome filters extract complete subgraphs without interleaving.
-- `note` is used for static import/dependency annotations (seq 23, 25) and for
-  absent-path findings (seq 45, 46); `event` is used for fire-and-forget writes
-  to stdout and for the LiteLLM-present signal (seq 39).
+- Adapter construction (seq 23-35) is ordered after `uvicorn.run` (seq 21)
+  because it happens inside the ASGI lifespan, not in `build_app`.
+- Error links occupy seq 49-57 and the remaining anomaly link seq 58, after the
+  happy path, so outcome filters extract complete subgraphs without interleaving;
+  seq 59 is a success note recording the absent construction-before-ownership
+  window.
+- `note` is used for static import/dependency annotations (seq 47-48), for the
+  resolved ownership note (seq 59), and for the remaining anomaly finding
+  (seq 58); `event` is used for fire-and-forget writes to stdout and for the
+  LiteLLM-present signal (seq 49).
 
 ## References
 
@@ -259,8 +265,8 @@ operator-facing terminal event rather than a leak across restarts.
 - [README.md §Configuration](README.md) — JSONC rules, env-reference semantics, and "Configuration changes require restart/recreation".
 - [README.md §Observability](README.md) — JSON records on stdout and dependency-log suppression.
 - [README.md §Verification](README.md) — the offline/container verification commands the startup path feeds.
-- [AGENTS.md../../AGENTS.md — contracts for LiteLLM absence, sanitized logs, and bootstrap ownership of adapter lifetimes.
-- [CHANGELOG.md../../CHANGELOG.md §1.0.0 — the CLI/JSONC/LiteLLM-free startup as a breaking change.
+- [AGENTS.md](../../AGENTS.md) — contracts for LiteLLM absence, sanitized logs, and bootstrap ownership of adapter lifetimes.
+- [CHANGELOG.md](../../CHANGELOG.md) — the lifespan-ownership and JSON-contract fixes under Unreleased.
 
 ### Related lifecycles
 

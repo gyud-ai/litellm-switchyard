@@ -4,7 +4,7 @@
 
 A client authenticates to the gateway and receives the list of public labels it may pass as `model`: every configured pair alias followed by every direct model alias. The response is built entirely from configuration frozen at process startup; no router, compressor, transport, or backend is touched.
 
-- **Entry point:** `GET /v1/models` → `create_app.models` (`src/switchyard_gateway/adapters/ingress.py:192`)
+- **Entry point:** `GET /v1/models` → `create_app.models` (`src/switchyard_gateway/adapters/ingress.py:198`)
 - **Trigger:** An operator or OpenAI-compatible client probes the gateway for the route and model aliases it may request.
 - **Termination:** Returns to the initiator (`CLIENT`); the happy path has no server-side sink or dead-end.
 - **Response:**
@@ -33,11 +33,11 @@ A client authenticates to the gateway and receives the list of public labels it 
 
 1. (seq 1–8) At process start `bootstrap.main` calls `load_config(args.config)` (default `config.jsonc`); the config adapter reads the JSONC document, resolves `{env:...}` references, validates that pair and model labels do not collide, constructs a frozen `Settings`, and returns it to the composition root. `build_app` stores it on `Gateway`, and `uvicorn.run(..., workers=1, access_log=False)` starts one ASGI worker.
 2. (seq 10) The client issues `GET /v1/models` with `Authorization: Bearer <key>`.
-3. (seq 11) Uvicorn dispatches the request to the FastAPI route `create_app.models` (`src/switchyard_gateway/adapters/ingress.py:192`).
-4. (seq 12–13) The handler mints `request_id = uuid.uuid4().hex` before authenticating (`src/switchyard_gateway/adapters/ingress.py:194`).
-5. (seq 14–15) `authorize` accepts: `hmac.compare_digest` matches the header against `Bearer {gateway.settings.api_key}` (`src/switchyard_gateway/adapters/ingress.py:181`).
-6. (seq 16–19) The handler reads `gateway.settings.pairs` and `gateway.settings.models` and concatenates their keys in configuration order, `names = [*pairs, *models]` (`src/switchyard_gateway/adapters/ingress.py:197`).
-7. (seq 20) It returns `200` with `{"object":"list","data":[{"id":<alias>,"object":"model","created":0,"owned_by":"gateway"}...]}` and the `x-request-id` header (`src/switchyard_gateway/adapters/ingress.py:198`). Pairs precede direct models, so the fixture labels resolve to `["switchyard", "cheap", "expensive"]`.
+3. (seq 11) Uvicorn dispatches the request to the FastAPI route `create_app.models` (`src/switchyard_gateway/adapters/ingress.py:198`).
+4. (seq 12–13) The handler mints `request_id = uuid.uuid4().hex` before authenticating (`src/switchyard_gateway/adapters/ingress.py:200`).
+5. (seq 14–15) `authorize` accepts: `hmac.compare_digest` matches the header against `Bearer {gateway.settings.api_key}` (`src/switchyard_gateway/adapters/ingress.py:187`).
+6. (seq 16–19) The handler reads `gateway.settings.pairs` and `gateway.settings.models` and concatenates their keys in configuration order, `names = [*pairs, *models]` (`src/switchyard_gateway/adapters/ingress.py:204`).
+7. (seq 20) It returns `200` with `{"object":"list","data":[{"id":<alias>,"object":"model","created":0,"owned_by":"gateway"}...]}` and the `x-request-id` header (`src/switchyard_gateway/adapters/ingress.py:205`). Pairs precede direct models, so the fixture labels resolve to `["switchyard", "cheap", "expensive"]`.
 
 ## Error paths
 
@@ -45,7 +45,7 @@ A client authenticates to the gateway and receives the list of public labels it 
 
 _Covers:_ seq 30, 31, 32, 33; `AUTHORIZE` → `MODELS_ROUTE` (outcome: error); `MODELS_ROUTE` → `ERROR_RESPONSE` (outcome: error); `ERROR_RESPONSE` → `MODELS_ROUTE` (outcome: error); `MODELS_ROUTE` → `CLIENT` (outcome: error)
 
-A missing or incorrect `Authorization` header makes `hmac.compare_digest` fail, so `create_app.authorize` raises `GatewayError("unauthorized", 401)` (`src/switchyard_gateway/adapters/ingress.py:181`). The route's `except GatewayError` branch calls `_error`, which returns a `JSONResponse` carrying `{"message":"unauthorized","type":"gateway_error","code":"unauthorized"}` and `status_code=401` with a fresh `x-request-id` (`src/switchyard_gateway/adapters/ingress.py:101`). No config read, upstream contact, or state mutation occurs on this branch.
+A missing or incorrect `Authorization` header makes `hmac.compare_digest` fail, so `create_app.authorize` raises `GatewayError("unauthorized", 401)` (`src/switchyard_gateway/adapters/ingress.py:187`). The route's `except GatewayError` branch calls `_error`, which returns a `JSONResponse` carrying `{"message":"unauthorized","type":"gateway_error","code":"unauthorized"}` and `status_code=401` with a fresh `x-request-id` (`src/switchyard_gateway/adapters/ingress.py:101`). No config read, upstream contact, or state mutation occurs on this branch.
 
 ## Anomalies
 
@@ -53,7 +53,7 @@ A missing or incorrect `Authorization` header makes `hmac.compare_digest` fail, 
 
 _Covers:_ seq 40; `MODELS_ROUTE` → `EVENT_SINK` (outcome: anomaly)
 
-The chat handler emits a `request` event for early rejections (`src/switchyard_gateway/adapters/ingress.py:264`, `:282`) and exactly one terminal event per opened exchange via `Gateway.finish` (`src/switchyard_gateway/application.py:251`), and the README instructs operators to read JSON records from the container logs (`README.md` §Observability). The `models` handler contains no `gateway.events.emit` on either the `200` or the `401` path (`src/switchyard_gateway/adapters/ingress.py:192`), so both successful alias discovery and authentication-failure probes leave no record in the event stream. The test that pins a `401` without a token asserts only the status code and never an event (`tests/test_ingress.py:TestChatIngress.test_authentication_and_model_discovery`), so the gap is unpinned. This is a verified-absent path, not a handled failure: nothing errors, a record that every other inbound route produces is simply never written.
+The chat handler emits a `request` event for early rejections (`src/switchyard_gateway/adapters/ingress.py:272`, `:282`) and exactly one terminal event per opened exchange via `Gateway.finish` (`src/switchyard_gateway/application.py:251`), and the README instructs operators to read JSON records from the container logs (`README.md` §Observability). The `models` handler contains no `gateway.events.emit` on either the `200` or the `401` path (`src/switchyard_gateway/adapters/ingress.py:198`), so both successful alias discovery and authentication-failure probes leave no record in the event stream. The test that pins a `401` without a token asserts only the status code and never an event (`tests/test_ingress.py:TestChatIngress.test_authentication_and_model_discovery`), so the gap is unpinned. This is a verified-absent path, not a handled failure: nothing errors, a record that every other inbound route produces is simply never written.
 
 ## Verification
 
