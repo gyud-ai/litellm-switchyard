@@ -1,7 +1,7 @@
 {
   "version": 3,
   "directed": true,
-  "multigraph": false,
+  "multigraph": true,
   "graph": {
     "name": "Health Check"
   },
@@ -28,17 +28,24 @@
     },
     {
       "id": "HEALTH_ROUTE",
-      "symbol": "health",
-      "description": "Async route handler registered for GET /health/liveliness and GET /health/readiness (both decorators stack on the same function). Returns {\"status\": \"ok\"} unconditionally and consults neither gateway settings nor backends.",
+      "symbol": "create_app.readiness",
+      "description": "Route handlers for the two health paths: liveliness() returns the literal {\"status\": \"ok\"} without reading gateway state, and readiness() asks gateway.ready() before choosing 200 ok or 503 not_ready.",
       "group": 2,
       "role": "sink"
     },
     {
-      "id": "BACKEND_REPLICAS",
-      "symbol": "Endpoint",
-      "description": "Configured backend model replicas (domain.Endpoint) reached in normal chat traffic through the BackendTransport port. Included only to record the readiness probe that is expected but never performed.",
-      "group": 6,
-      "role": "dead-end"
+      "id": "GATEWAY",
+      "symbol": "Gateway.ready",
+      "description": "Application-core readiness predicate: true when at least one configured replica's cooldown deadline is at or before the monotonic clock. Reads no transport and opens no connection.",
+      "group": 3,
+      "role": "intermediary"
+    },
+    {
+      "id": "REPLICA_STATE",
+      "symbol": "Gateway._cooldowns",
+      "description": "Process-local map of per-replica cooldown deadlines maintained by chat traffic; an absent entry means the replica was never cooled down and is eligible.",
+      "group": 3,
+      "role": "intermediary"
     }
   ],
   "links": [
@@ -67,7 +74,7 @@
       "kind": "call",
       "outcome": "success",
       "phase": "probe",
-      "description": "Route match dispatches to async health(); both health paths map to the same handler."
+      "description": "Route match dispatches /health/liveliness to liveliness() and /health/readiness to readiness()."
     },
     {
       "source": "HEALTH_ROUTE",
@@ -75,8 +82,8 @@
       "seq": 4,
       "kind": "return",
       "outcome": "success",
-      "phase": "probe",
-      "description": "Returns the literal payload {\"status\": \"ok\"}."
+      "phase": "liveliness",
+      "description": "liveliness() returns the literal payload {\"status\": \"ok\"}; the static process check touches no port and no replica state."
     },
     {
       "source": "FASTAPI_APP",
@@ -84,7 +91,7 @@
       "seq": 5,
       "kind": "return",
       "outcome": "success",
-      "phase": "probe",
+      "phase": "liveliness",
       "description": "200 response with application/json body."
     },
     {
@@ -93,17 +100,98 @@
       "seq": 6,
       "kind": "return",
       "outcome": "success",
-      "phase": "probe",
+      "phase": "liveliness",
       "description": "HTTP 200 with {\"status\": \"ok\"} returned to the caller."
     },
     {
       "source": "HEALTH_ROUTE",
-      "target": "BACKEND_REPLICAS",
+      "target": "GATEWAY",
       "seq": 7,
-      "kind": "note",
-      "outcome": "anomaly",
+      "kind": "call",
+      "outcome": "success",
       "phase": "readiness",
-      "description": "Absent interaction: health() never probes replica reachability, readiness, or configuration, so /health/readiness cannot report a degraded state. Annotated rather than called because no runtime message is ever exchanged."
+      "description": "readiness() calls gateway.ready() before building the response."
+    },
+    {
+      "source": "GATEWAY",
+      "target": "REPLICA_STATE",
+      "seq": 8,
+      "kind": "call",
+      "outcome": "success",
+      "phase": "readiness",
+      "description": "ready() scans the cooldown deadline of every configured model endpoint."
+    },
+    {
+      "source": "REPLICA_STATE",
+      "target": "GATEWAY",
+      "seq": 9,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "readiness",
+      "description": "Cooldown deadlines; endpoints without an entry are eligible."
+    },
+    {
+      "source": "GATEWAY",
+      "target": "HEALTH_ROUTE",
+      "seq": 10,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "readiness",
+      "description": "True when at least one deadline is at or before the current clock value."
+    },
+    {
+      "source": "HEALTH_ROUTE",
+      "target": "FASTAPI_APP",
+      "seq": 11,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "readiness",
+      "description": "Ready branch: JSONResponse 200 {\"status\": \"ok\"}."
+    },
+    {
+      "source": "FASTAPI_APP",
+      "target": "UVICORN_SERVER",
+      "seq": 12,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "readiness",
+      "description": "200 response with application/json body."
+    },
+    {
+      "source": "UVICORN_SERVER",
+      "target": "CLIENT",
+      "seq": 13,
+      "kind": "return",
+      "outcome": "success",
+      "phase": "readiness",
+      "description": "HTTP 200 with {\"status\": \"ok\"} returned to the caller."
+    },
+    {
+      "source": "HEALTH_ROUTE",
+      "target": "FASTAPI_APP",
+      "seq": 20,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "readiness",
+      "description": "Not-ready branch: JSONResponse 503 {\"status\": \"not_ready\"} when ready() is false."
+    },
+    {
+      "source": "FASTAPI_APP",
+      "target": "UVICORN_SERVER",
+      "seq": 21,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "readiness",
+      "description": "503 response with application/json body."
+    },
+    {
+      "source": "UVICORN_SERVER",
+      "target": "CLIENT",
+      "seq": 22,
+      "kind": "return",
+      "outcome": "error",
+      "phase": "readiness",
+      "description": "HTTP 503 with {\"status\": \"not_ready\"} returned to the caller."
     }
   ]
 }

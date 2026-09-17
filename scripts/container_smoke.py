@@ -226,7 +226,9 @@ def main(image: str) -> None:
             records = [json.loads(line) for line in log.stdout.splitlines()]
             assert any(record.get("compression") == "savings" for record in records)
             assert any(record.get("event") == "retry" for record in records)
-            assert sum(record.get("event") == "request" for record in records) == 8
+            requests = [record for record in records if record.get("event") == "request"]
+            assert len(requests) == 9
+            assert any("model" not in record for record in requests)
             print(
                 json.dumps(
                     {

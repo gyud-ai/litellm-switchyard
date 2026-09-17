@@ -71,6 +71,8 @@ require restart/recreation.
   replay after an ambiguous timeout or after streaming begins.
 - `cooldown_seconds`: 30 by default. Replica failures respect longer `Retry-After`
   values. Cooldowns and round-robin positions are process-local; run one worker.
+  `/health/readiness` consults this cooldown table, so it forgets failures across
+  restarts just like routing does.
 - `forward_headers`: explicit application `x-` headers, initially `x-session-id`
   and `x-opencode-session`. Backend credentials replace gateway authorization.
 
@@ -91,7 +93,14 @@ replaced with a sanitized error code. Tier selection never changes for failover.
 
 - `POST /v1/chat/completions`: text and tool messages, regular JSON or SSE streaming.
 - `GET /v1/models`: pair labels and direct model labels.
-- `GET /health/liveliness`, `GET /health/readiness`: unauthenticated process checks.
+- `GET /health/liveliness`: unauthenticated static process check, always `200
+  {"status":"ok"}`.
+- `GET /health/readiness`: unauthenticated serving check. Returns `200
+  {"status":"ok"}` while at least one configured replica is eligible to serve
+  (not cooling down) and `503 {"status":"not_ready"}` when every replica is
+  cooling down. It reflects request-routing eligibility observed from chat
+  traffic; it does not probe backends, and a never-failed backend is reported
+  ready.
 
 Responses keep the requested model alias. Headers `x-request-id`,
 `x-gateway-model`, and `x-gateway-endpoint` identify the request, selected model
@@ -126,6 +135,11 @@ compression outcome and token savings, and provider token usage when supplied.
 Body-byte latency is not necessarily first-token latency. Token counts from
 compression are estimates over eligible history; provider usage is reported
 separately. Streams log completed, interrupted, or cancelled outcomes.
+
+`GET /v1/models` emits one `request` record per call: `outcome:"completed"` with
+status 200 for authorized discovery and `outcome:"rejected"` with status 401 and
+`error:"unauthorized"` for a missing or wrong key. Records carry the request ID,
+status, and outcome; they never carry aliases, headers, or payloads.
 
 Logs exclude prompts, outputs, URLs, credentials, raw headers, and raw SDK errors.
 Use non-sensitive route/model/endpoint labels: labels are intentionally logged.

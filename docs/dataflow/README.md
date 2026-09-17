@@ -43,11 +43,11 @@ are placed in group 3, the closest fit in this legend.
 
 | Lifecycle | Entry point | Location | Graph | Nodes / links |
 | --- | --- | --- | --- | --- |
-| Health check | `GET /health/liveliness`, `GET /health/readiness` | [ingress.py:203](../../src/switchyard_gateway/adapters/ingress.py) `create_app.health` | [health-check.json](health-check.json) · [md](health-check.md) | 5 / 7 |
-| Model discovery | `GET /v1/models` | [ingress.py:207](../../src/switchyard_gateway/adapters/ingress.py) `create_app.models` | [model-discovery.json](model-discovery.json) · [md](model-discovery.md) | 12 / 24 |
-| Chat completion (JSON) | `POST /v1/chat/completions` | [ingress.py:227](../../src/switchyard_gateway/adapters/ingress.py) `create_app.chat` | [chat-completion.json](chat-completion.json) · [md](chat-completion.md) | 18 / 78 |
-| Chat completion (SSE) | `POST /v1/chat/completions` with `stream: true` | [ingress.py:227](../../src/switchyard_gateway/adapters/ingress.py) `create_app.chat` → `sse_body` / `OwnedStream` | [chat-stream.json](chat-stream.json) · [md](chat-stream.md) | 20 / 76 |
-| Application lifespan | FastAPI lifespan enter/exit | [bootstrap.py:29](../../src/switchyard_gateway/bootstrap.py) `build_app.lifespan` | [app-lifespan.json](app-lifespan.json) · [md](app-lifespan.md) | 15 / 52 |
+| Health check | `GET /health/liveliness`, `GET /health/readiness` | [ingress.py:206](../../src/switchyard_gateway/adapters/ingress.py) `create_app.readiness` | [health-check.json](health-check.json) · [md](health-check.md) | 6 / 16 |
+| Model discovery | `GET /v1/models` | [ingress.py:212](../../src/switchyard_gateway/adapters/ingress.py) `create_app.models` | [model-discovery.json](model-discovery.json) · [md](model-discovery.md) | 12 / 25 |
+| Chat completion (JSON) | `POST /v1/chat/completions` | [ingress.py:249](../../src/switchyard_gateway/adapters/ingress.py) `create_app.chat` | [chat-completion.json](chat-completion.json) · [md](chat-completion.md) | 18 / 79 |
+| Chat completion (SSE) | `POST /v1/chat/completions` with `stream: true` | [ingress.py:249](../../src/switchyard_gateway/adapters/ingress.py) `create_app.chat` → `sse_body` / `OwnedStream` | [chat-stream.json](chat-stream.json) · [md](chat-stream.md) | 20 / 76 |
+| Application lifespan | FastAPI lifespan enter/exit | [bootstrap.py:28](../../src/switchyard_gateway/bootstrap.py) `build_app.lifespan` | [app-lifespan.json](app-lifespan.json) · [md](app-lifespan.md) | 15 / 52 |
 | CLI startup | `switchyard-gateway [--config] [--check]` | [bootstrap.py:73](../../src/switchyard_gateway/bootstrap.py) `main` | [cli-startup.json](cli-startup.json) · [md](cli-startup.md) | 23 / 59 |
 
 Out of scope: `scripts/smoke.py`, `scripts/container_smoke.py`, and
@@ -74,15 +74,9 @@ authoritative and cites the code.
 - [chat-completion](chat-completion.md) — `application.py:Gateway.finish`
   closes the upstream before emitting; if the close raises, the event is logged
   `completed` and the exception replaces the already-built JSON response.
-- [chat-completion](chat-completion.md) — the non-streaming branch has no
-  upstream `content-type` guard (the streaming branch does), so a wrong-type 200
-  surfaces as a generic `invalid_upstream_response` 502.
 
 ### Probes and side effects absent where expected
 
-- [health-check](health-check.md) — `/health/readiness` is the same
-  unconditional handler as `/health/liveliness` and never consults `Settings`,
-  the compressor, or the transport, so readiness cannot report a degraded state.
-- [model-discovery](model-discovery.md) — `create_app.models` never calls
-  `gateway.events.emit` on either the 200 or 401 path, so discovery and its
-  rejections are invisible in the JSON event stream.
+None recorded. `health-check` now gates readiness on replica eligibility and
+`model-discovery` emits one request event per outcome; both former findings were
+fixed in [CHANGELOG.md](../../CHANGELOG.md) §Unreleased.

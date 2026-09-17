@@ -170,6 +170,40 @@ class TestReplicaSelection:
         assert gateway.events.records[-1]["outcome"] == "cancelled"
 
 
+class TestReadiness:
+    def test_ready_when_any_replica_is_eligible(self, settings):
+        gateway = Gateway(settings, Router(), Compressor(), Transport(), Events())
+        assert gateway.ready()
+        gateway._cooldown("cheap", "a")
+        assert gateway.ready()
+        gateway._cooldown("cheap", "b")
+        assert gateway.ready()
+        gateway._cooldown("expensive", "c")
+        assert not gateway.ready()
+
+    def test_ready_without_configured_models(self):
+        gateway = Gateway(Settings({}, {}, "key"), Router(), Compressor(), Transport(), Events())
+        assert not gateway.ready()
+
+    def test_ready_at_zero_clock_without_recorded_cooldowns(self, settings):
+        gateway = Gateway(settings, Router(), Compressor(), Transport(), Events(), lambda: 0.0)
+        assert gateway.ready()
+
+    def test_readiness_recovers_at_exact_cooldown_expiry(self, settings):
+        now = [100.0]
+        gateway = Gateway(settings, Router(), Compressor(), Transport(), Events(), lambda: now[0])
+        gateway._cooldown("cheap", "a")
+        gateway._cooldown("cheap", "b")
+        gateway._cooldown("expensive", "c")
+        assert not gateway.ready()
+        now[0] = 130.0
+        assert gateway.ready()
+
+    def test_readiness_probe_emits_no_events(self, gateway):
+        assert gateway.ready()
+        assert gateway.events.records == []
+
+
 class TestReplicaPolicyContracts:
     async def test_round_robin_advances_in_configured_order(self):
         model = Model(
