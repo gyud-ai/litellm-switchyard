@@ -126,8 +126,10 @@ separately. Streams log completed, interrupted, or cancelled outcomes.
 
 Logs exclude prompts, outputs, URLs, credentials, raw headers, and raw SDK errors.
 Use non-sensitive route/model/endpoint labels: labels are intentionally logged.
-Dependency logs are disabled in the CLI. Docker rotates three 10 MB files.
-No metrics collector, tracing service, spend store, or UI is included.
+Dependency logs are disabled in the CLI. In-process callers use
+`with silence_dependency_logs():` so the previous logging level is restored on
+exit. Docker rotates three 10 MB files. No metrics collector, tracing service,
+spend store, or UI is included.
 
 ## Architecture and upgrades
 

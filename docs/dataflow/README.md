@@ -77,8 +77,6 @@ authoritative and cites the code.
 - [chat-completion](chat-completion.md) — the non-streaming branch has no
   upstream `content-type` guard (the streaming branch does), so a wrong-type 200
   surfaces as a generic `invalid_upstream_response` 502.
-- [cli-startup](cli-startup.md) — `silence_dependency_logs` disables logging
-  process-globally without restoring it.
 
 ### Probes and side effects absent where expected
 

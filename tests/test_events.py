@@ -2,10 +2,16 @@
 
 import asyncio
 import copy
+import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 import pytest
 from conftest import Compressor, Events, Response, Router, Transport
+from hypothesis import given
+from hypothesis import strategies as st
 
+from switchyard_gateway.adapters.logging import DependencyLogSilencer, silence_dependency_logs
 from switchyard_gateway.application import Gateway
 from switchyard_gateway.domain import ConnectFailure, GatewayError
 
@@ -204,3 +210,105 @@ class TestTimings:
             value = event[key]
             assert value > 0, key
             assert abs(value - round(value)) < 1e-9, (key, value)
+
+
+@contextmanager
+def _restored_disable_level() -> Iterator[None]:
+    """Restore the global disable level even when an assertion fails."""
+    previous = logging.root.manager.disable
+    try:
+        yield
+    finally:
+        logging.disable(previous)
+
+
+def test_silencing_scope_restores_prior_level_and_reenables_logging() -> None:
+    with _restored_disable_level():
+        logging.disable(logging.WARNING)
+        records: list[str] = []
+
+        class Recording(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                records.append(record.getMessage())
+
+        logger = logging.getLogger("switchyard.test.silencer")
+        handler = Recording()
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
+        try:
+            with silence_dependency_logs():
+                assert logging.root.manager.disable == logging.CRITICAL
+                logger.error("hidden")
+            assert logging.root.manager.disable == logging.WARNING
+            logger.error("visible")
+        finally:
+            logger.removeHandler(handler)
+        assert records == ["visible"]
+
+
+def test_bare_call_silences_until_the_returned_handle_is_released() -> None:
+    with _restored_disable_level():
+        logging.disable(logging.INFO)
+        silencer = silence_dependency_logs()
+        assert logging.root.manager.disable == logging.CRITICAL
+        with silencer:
+            assert logging.root.manager.disable == logging.CRITICAL
+        assert logging.root.manager.disable == logging.INFO
+
+
+def test_nested_silencing_scopes_restore_each_level() -> None:
+    with _restored_disable_level():
+        logging.disable(logging.ERROR)
+        with silence_dependency_logs():
+            assert logging.root.manager.disable == logging.CRITICAL
+            with silence_dependency_logs():
+                assert logging.root.manager.disable == logging.CRITICAL
+            assert logging.root.manager.disable == logging.CRITICAL
+        assert logging.root.manager.disable == logging.ERROR
+
+
+def test_reentering_one_handle_silences_until_the_outermost_exit() -> None:
+    with _restored_disable_level():
+        logging.disable(logging.WARNING)
+        silencer = silence_dependency_logs()
+        with silencer:
+            with silencer:
+                assert logging.root.manager.disable == logging.CRITICAL
+            assert logging.root.manager.disable == logging.CRITICAL
+        assert logging.root.manager.disable == logging.WARNING
+
+
+def test_release_without_entry_leaves_logging_unchanged() -> None:
+    with _restored_disable_level():
+        logging.disable(logging.ERROR)
+        DependencyLogSilencer().__exit__()
+        assert logging.root.manager.disable == logging.ERROR
+
+
+def test_silencing_scope_restores_when_the_body_raises() -> None:
+    with _restored_disable_level():
+        logging.disable(logging.ERROR)
+        with pytest.raises(RuntimeError):
+            with silence_dependency_logs():
+                raise RuntimeError("private dependency failure")
+        assert logging.root.manager.disable == logging.ERROR
+
+
+@given(prior=st.integers())
+def test_property_scope_restores_exactly_the_prior_disable_level(prior: int) -> None:
+    with _restored_disable_level():
+        logging.disable(prior)
+        with silence_dependency_logs():
+            assert logging.root.manager.disable == logging.CRITICAL
+        assert logging.root.manager.disable == prior
+
+
+@given(prior=st.integers())
+def test_property_nested_scopes_restore_exactly_the_prior_disable_level(prior: int) -> None:
+    with _restored_disable_level():
+        logging.disable(prior)
+        with silence_dependency_logs():
+            with silence_dependency_logs():
+                assert logging.root.manager.disable == logging.CRITICAL
+            assert logging.root.manager.disable == logging.CRITICAL
+        assert logging.root.manager.disable == prior

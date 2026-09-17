@@ -47,62 +47,68 @@ class FakeTransport:
 
 async def main(iterations: int) -> None:
     """Report warm p50/p95 preparation latency for fixed short and long inputs."""
-    silence_dependency_logs()
-    models = {
-        name: Model(name, "test-model", (Endpoint(name, "http://unused.invalid/v1"),))
-        for name in ("cheap", "capable")
-    }
-    settings = Settings(models, {"pair": Pair("pair", "capable", "cheap")}, "unused")
-    compressor = HeadroomCompressor()
-    gateway = Gateway(
-        settings, SwitchyardRouter(StagePolicy()), compressor, FakeTransport(), Sink()
-    )
-    rows = [{"id": i, "status": "ok", "region": "west", "count": 1} for i in range(300)]
-    short = [{"role": "user", "content": "hello"}]
-    long = [
-        {"role": "user", "content": "Inspect these results"},
-        {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [
-                {"id": "call", "type": "function", "function": {"name": "fetch", "arguments": "{}"}}
-            ],
-        },
-        {"role": "tool", "tool_call_id": "call", "content": json.dumps(rows)},
-        {"role": "assistant", "content": "Results received"},
-        {"role": "user", "content": "Summarize the results"},
-    ]
-    try:
-        for name, messages in (("short", short), ("long_tool_history", long)):
-            times: list[float] = []
-            compression: list[float] = []
-            savings = None
-            for i in range(iterations + 1):
-                start = time.perf_counter()
-                exchange = await gateway.open({"model": "pair", "messages": messages}, {}, "bench")
-                elapsed = (time.perf_counter() - start) * 1000
-                await gateway.finish(exchange, "completed")
-                if i:
-                    times.append(elapsed)
-                    compression.append(exchange.event["compression_ms"])
-                    savings = exchange.event.get("tokens_saved")
-            ordered = sorted(times)
-            print(
-                json.dumps(
+    with silence_dependency_logs():
+        models = {
+            name: Model(name, "test-model", (Endpoint(name, "http://unused.invalid/v1"),))
+            for name in ("cheap", "capable")
+        }
+        settings = Settings(models, {"pair": Pair("pair", "capable", "cheap")}, "unused")
+        compressor = HeadroomCompressor()
+        gateway = Gateway(
+            settings, SwitchyardRouter(StagePolicy()), compressor, FakeTransport(), Sink()
+        )
+        rows = [{"id": i, "status": "ok", "region": "west", "count": 1} for i in range(300)]
+        short = [{"role": "user", "content": "hello"}]
+        long = [
+            {"role": "user", "content": "Inspect these results"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
                     {
-                        "scenario": name,
-                        "iterations": iterations,
-                        "preparation_p50_ms": statistics.median(times),
-                        "preparation_p95_ms": ordered[
-                            min(len(ordered) - 1, int(0.95 * len(ordered)))
-                        ],
-                        "compression_p50_ms": statistics.median(compression),
-                        "tokens_saved": savings,
+                        "id": "call",
+                        "type": "function",
+                        "function": {"name": "fetch", "arguments": "{}"},
                     }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call", "content": json.dumps(rows)},
+            {"role": "assistant", "content": "Results received"},
+            {"role": "user", "content": "Summarize the results"},
+        ]
+        try:
+            for name, messages in (("short", short), ("long_tool_history", long)):
+                times: list[float] = []
+                compression: list[float] = []
+                savings = None
+                for i in range(iterations + 1):
+                    start = time.perf_counter()
+                    exchange = await gateway.open(
+                        {"model": "pair", "messages": messages}, {}, "bench"
+                    )
+                    elapsed = (time.perf_counter() - start) * 1000
+                    await gateway.finish(exchange, "completed")
+                    if i:
+                        times.append(elapsed)
+                        compression.append(exchange.event["compression_ms"])
+                        savings = exchange.event.get("tokens_saved")
+                ordered = sorted(times)
+                print(
+                    json.dumps(
+                        {
+                            "scenario": name,
+                            "iterations": iterations,
+                            "preparation_p50_ms": statistics.median(times),
+                            "preparation_p95_ms": ordered[
+                                min(len(ordered) - 1, int(0.95 * len(ordered)))
+                            ],
+                            "compression_p50_ms": statistics.median(compression),
+                            "tokens_saved": savings,
+                        }
+                    )
                 )
-            )
-    finally:
-        await compressor.close()
+        finally:
+            await compressor.close()
 
 
 if __name__ == "__main__":
