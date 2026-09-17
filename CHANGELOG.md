@@ -8,16 +8,7 @@ The version lives in `pyproject.toml` (`[project] version`).
 
 ## [Unreleased]
 
-### Added
-
-- Unit, integration, and smoke test tiers that need no model inference, plus
-  Hypothesis property tests for history protection, structural comparison,
-  round-robin distribution, routing-tier validation, retry bounds, and cooldown
-  parsing.
-- A mutation-testing configuration (`[tool.mutmut]`) targeting the routing and
-  compression policy in `application.py` and `domain.py`.
-
-## [1.0.0] - 2026-09-17
+## [0.4.0] - 2026-09-17
 
 ### Added
 
@@ -27,6 +18,12 @@ The version lives in `pyproject.toml` (`[project] version`).
   round-robin selection, cooldowns, and bounded same-model failover.
 - Streaming Chat Completions, direct model routes, authentication, protected
   history, structured logs, real adapter contracts, and offline benchmarks.
+- Unit, integration, and smoke test tiers that need no model inference, plus
+  Hypothesis property tests for history protection, structural comparison,
+  round-robin distribution, routing-tier validation, retry bounds, and cooldown
+  parsing.
+- A mutation-testing configuration (`[tool.mutmut]`) targeting the routing and
+  compression policy in `application.py` and `domain.py`.
 
 ### Changed
 
@@ -107,9 +104,8 @@ plus opt-in Headroom prompt compression.
   (`1bfe2bb`, `6f76e67`).
 - Apache-2.0 license, quickstart and setup docs.
 
-[Unreleased]: https://github.com/gyud-ai/litellm-switchyard/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/gyud-ai/litellm-switchyard/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/gyud-ai/litellm-switchyard/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/gyud-ai/litellm-switchyard/compare/v0.1.1...v0.3.0
 [0.1.1]: https://github.com/gyud-ai/litellm-switchyard/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/gyud-ai/litellm-switchyard/releases/tag/v0.1.0
-
-[1.0.0]: https://github.com/gyud-ai/litellm-switchyard/compare/v0.3.0...v1.0.0

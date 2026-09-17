@@ -1,6 +1,6 @@
 [project]
 name = "switchyard-gateway"
-version = "1.0.0"
+version = "0.4.0"
 description = "A small ports-and-adapters gateway for Switchyard and Headroom"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
