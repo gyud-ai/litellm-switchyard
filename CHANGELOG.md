@@ -8,6 +8,16 @@ The version lives in `pyproject.toml` (`[project] version`).
 
 ## [Unreleased]
 
+### Fixed
+
+- Own adapter lifetimes from the ASGI lifespan: the pooled HTTP client and the
+  compression executor are constructed on an `AsyncExitStack` inside the
+  lifespan, so a failed startup or server start leaves nothing to leak; each
+  teardown step is independent, so a failing close cannot skip the other; and
+  exactly one sanitized `{"event":"shutdown"}` record is emitted after release.
+- Emit a sanitized `startup_failed` JSON record for CLI argument errors instead
+  of exiting with only argparse's unstructured stderr text.
+
 ## [0.4.0] - 2026-09-17
 
 ### Added

@@ -1,9 +1,11 @@
 """Hermetic application fixtures; live configuration is never loaded implicitly."""
 
+import asyncio
 import copy
 import json
 from collections.abc import AsyncIterator
 from dataclasses import replace
+from typing import Any
 
 import pytest
 
@@ -164,3 +166,53 @@ def gateway(settings: Settings) -> Gateway:
 @pytest.fixture
 def without_compression(settings: Settings) -> Settings:
     return replace(settings, compression=False)
+
+
+class LifespanDriver:
+    """Drive the ASGI lifespan protocol the way a server would for one full cycle."""
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+        self.messages: list[dict] = []
+        self.error: BaseException | None = None
+        self._incoming: asyncio.Queue[dict] = asyncio.Queue()
+        self._started = asyncio.Event()
+        self._task: asyncio.Task[Any] | None = None
+
+    async def _receive(self) -> dict:
+        return await self._incoming.get()
+
+    async def _send(self, message: dict) -> None:
+        self.messages.append(message)
+        if message["type"] in {"lifespan.startup.complete", "lifespan.startup.failed"}:
+            self._started.set()
+
+    async def start(self) -> None:
+        scope = {"type": "lifespan", "asgi": {"spec_version": "2.0", "version": "3.0"}}
+        await self._incoming.put({"type": "lifespan.startup"})
+        self._task = asyncio.create_task(self.app(scope, self._receive, self._send))
+        await self._started.wait()
+
+    async def stop(self) -> None:
+        if self.messages and self.messages[-1]["type"] == "lifespan.startup.complete":
+            await self._incoming.put({"type": "lifespan.shutdown"})
+        if self._task is not None:
+            try:
+                await self._task
+            except BaseException as error:
+                self.error = error
+
+    async def __aenter__(self) -> LifespanDriver:
+        await self.start()
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        await self.stop()
+
+
+async def run_lifespan(app: Any) -> LifespanDriver:
+    """Start and stop one ASGI lifespan, returning the driver with captured state."""
+    driver = LifespanDriver(app)
+    await driver.start()
+    await driver.stop()
+    return driver

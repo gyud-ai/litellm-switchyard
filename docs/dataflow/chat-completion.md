@@ -8,9 +8,9 @@ through Headroom, selects one replica, opens exactly one upstream exchange, buff
 completion, rewrites `model` to the requested alias while capturing provider `usage`, closes
 the upstream, and emits exactly one terminal event.
 
-- **Entry point:** `POST /v1/chat/completions` (no `stream`, or `stream: false`) handled by `create_app.chat` in `src/switchyard_gateway/adapters/ingress.py:212`
+- **Entry point:** `POST /v1/chat/completions` (no `stream`, or `stream: false`) handled by `create_app.chat` in `src/switchyard_gateway/adapters/ingress.py:219`
 - **Trigger:** An authenticated caller sends a Chat Completions payload that is not a streaming request
-- **Termination:** Sink node `EVENTS` (terminal record) after `GATEWAY_FINISH`; the JSON completion itself returns to the `CLIENT` initiator. `uvicorn.run` (`bootstrap.py:71`) owns the process lifetime.
+- **Termination:** Sink node `EVENTS` (terminal record) after `GATEWAY_FINISH`; the JSON completion itself returns to the `CLIENT` initiator. `uvicorn.run` (`bootstrap.py:98`) owns the process lifetime.
 - **Response:**
   - **Success:** HTTP 200 JSON body with upstream `choices` intact, `model` rewritten to the requested alias, provider `usage` captured into the terminal event, and `x-gateway-model`/`x-gateway-endpoint` headers
   - **Failure:** A sanitized JSON error body (`_error`, `ingress.py:101`) with `x-request-id` and a status of 400/401/404/413/500/502/503/504
@@ -21,9 +21,9 @@ the upstream, and emits exactly one terminal event.
 | Node ID | Group | Role | Symbol | What | Location |
 | --- | --- | --- | --- | --- | --- |
 | `CLIENT` | 1 | initiator | — | External OpenAI-compatible HTTP caller that posts a non-streaming Chat Completions request and consumes the JSON completion. | external HTTP caller |
-| `UVICORN` | 7 | intermediary | `uvicorn.run` | Single-worker ASGI server and event loop that accepts the socket and drives the FastAPI app. | `src/switchyard_gateway/bootstrap.py:71` |
-| `CHAT_ROUTE` | 2 | intermediary | `create_app.chat` | FastAPI route handler for POST /v1/chat/completions; owns authentication, body cap, validation, forwarding handoff, the JSON rewrite, and error responses. | `src/switchyard_gateway/adapters/ingress.py:212` |
-| `AUTHORIZER` | 2 | intermediary | `create_app.authorize` | Constant-time Bearer API-key check; raises `unauthorized` on mismatch. | `src/switchyard_gateway/adapters/ingress.py:181` |
+| `UVICORN` | 7 | intermediary | `uvicorn.run` | Single-worker ASGI server and event loop that accepts the socket and drives the FastAPI app. | `src/switchyard_gateway/bootstrap.py:98` |
+| `CHAT_ROUTE` | 2 | intermediary | `create_app.chat` | FastAPI route handler for POST /v1/chat/completions; owns authentication, body cap, validation, forwarding handoff, the JSON rewrite, and error responses. | `src/switchyard_gateway/adapters/ingress.py:219` |
+| `AUTHORIZER` | 2 | intermediary | `create_app.authorize` | Constant-time Bearer API-key check; raises `unauthorized` on mismatch. | `src/switchyard_gateway/adapters/ingress.py:187` |
 | `VALIDATOR` | 2 | intermediary | `_validate` | Validates model, messages, roles, text content, tool calls, and tool results into a `Payload`. | `src/switchyard_gateway/adapters/ingress.py:41` |
 | `GATEWAY_OPEN` | 3 | intermediary | `Gateway.open` | Application orchestration: routes the alias, protects history, compresses, selects a replica, and opens exactly one upstream exchange. | `src/switchyard_gateway/application.py:116` |
 | `ELIGIBLE_HISTORY` | 3 | intermediary | `eligible_indices` | Selects compressible older history while protecting instructions, cached rows, and complete live tool exchanges. | `src/switchyard_gateway/application.py:27` |
@@ -41,16 +41,16 @@ the upstream, and emits exactly one terminal event.
 
 ## Sequence
 
-1. (seq 1–2) An authenticated client posts a non-streaming Chat Completions payload; the single Uvicorn worker dispatches the ASGI scope to `create_app.chat` (`ingress.py:212`).
-2. (seq 3–4) `chat` calls `authorize` (`ingress.py:181`), which compares `Authorization` to `Bearer {gateway.settings.api_key}` with `hmac.compare_digest` (`ingress.py:182-185`); the check returns cleanly.
-3. (seq 5–6) `chat` accumulates `request.stream()` into a `bytearray`, enforcing `gateway.settings.max_request_bytes` (`ingress.py:220-224`), then `json.loads(..., parse_constant=_reject_constant)` (`ingress.py:37`) and `_validate` (`ingress.py:41`) return a validated `Payload`. `opened` becomes `True` (`ingress.py:229`).
+1. (seq 1–2) An authenticated client posts a non-streaming Chat Completions payload; the single Uvicorn worker dispatches the ASGI scope to `create_app.chat` (`ingress.py:219`).
+2. (seq 3–4) `chat` calls `authorize` (`ingress.py:187`), which compares `Authorization` to `Bearer {gateway.settings.api_key}` with `hmac.compare_digest` (`ingress.py:188-191`); the check returns cleanly.
+3. (seq 5–6) `chat` accumulates `request.stream()` into a `bytearray`, enforcing `gateway.settings.max_request_bytes` (`ingress.py:228-232`), then `json.loads(..., parse_constant=_reject_constant)` (`ingress.py:37`) and `_validate` (`ingress.py:41`) return a validated `Payload`. `opened` becomes `True` (`ingress.py:237`).
 4. (seq 7–11) `chat` calls `Gateway.open` (`application.py:116`). Inside `_open` (`application.py:132`) a pair alias resolves and `SwitchyardRouter.route` (`switchyard.py:88`) normalizes messages and runs `algorithms.stage_router` with `_CaptureClient`s (`switchyard.py:63`). Exactly one capture client records one request; the synthetic completion is discarded, original messages are restored, and a `RoutingResult` is returned (`switchyard.py:104-127`). A direct model label instead skips routing with `tier="direct"` (`application.py:148-150`).
 5. (seq 12–13) `eligible_indices` (`application.py:27`) returns the compressible older-history indices, retaining system/developer rows, cache-marked rows, the latest user/assistant turn, and connected live tool exchanges.
 6. (seq 14–19) `HeadroomCompressor.compress` (`headroom.py:50`) submits `_compress` to the single `ThreadPoolExecutor` (`headroom.py:18`), which calls `headroom.compress` with `kompress_model="disabled"` and returns a `CompressionResult` (`savings`, `no_savings`, or `failed_unknown`). `_open` rejects any result whose outcome is unknown or whose message structure changed (`_same_structure`, `application.py:58`), then writes the compressed rows back into the private `prepared` copy (`application.py:163-179`).
 7. (seq 20–24) `Gateway._select` round-robins an endpoint and `HttpxTransport.send` (`httpx.py:46`) opens `POST {base_url}/chat/completions` with `json=request`, returning an `HttpxResponse`. `_open` returns an `Exchange` carrying the open response, the event record, and start timings (`application.py:238-239`).
-8. (seq 25–30) `chat` reads the response to exhaustion through `async for chunk in gateway.body(exchange)` (`ingress.py:245`), which pulls `HttpxResponse.chunks` (`httpx.py:27`) and records `first_body_byte_ms` on the first non-empty chunk (`application.py:244-249`).
-9. (seq 31–35) `chat`'s `finally` calls `gateway.finish(exchange, "completed")` inside `anyio.CancelScope(shield=True)` (`ingress.py:293-295`) because `handed_off` is `False`. `finish` marks the exchange finished, closes the upstream response, updates `outcome`/`total_ms`, and emits exactly one terminal event through `JsonEvents.emit` (`application.py:251-262`).
-10. (seq 36–37) `chat` rewrites `value["model"] = payload["model"]` (`ingress.py:255`), captures recognized integer `usage` fields into `exchange.event["usage"]` (`_usage`, `ingress.py:24`) and returns `JSONResponse(value, headers=response_headers)` with `x-request-id`, `x-gateway-model`, and `x-gateway-endpoint` (`ingress.py:231-235`, `260`). Uvicorn writes the 200 JSON body to the client.
+8. (seq 25–30) `chat` reads the response to exhaustion through `async for chunk in gateway.body(exchange)` (`ingress.py:253`), which pulls `HttpxResponse.chunks` (`httpx.py:27`) and records `first_body_byte_ms` on the first non-empty chunk (`application.py:244-249`).
+9. (seq 31–35) `chat`'s `finally` calls `gateway.finish(exchange, "completed")` inside `anyio.CancelScope(shield=True)` (`ingress.py:301-303`) because `handed_off` is `False`. `finish` marks the exchange finished, closes the upstream response, updates `outcome`/`total_ms`, and emits exactly one terminal event through `JsonEvents.emit` (`application.py:251-262`).
+10. (seq 36–37) `chat` rewrites `value["model"] = payload["model"]` (`ingress.py:263`), captures recognized integer `usage` fields into `exchange.event["usage"]` (`_usage`, `ingress.py:24`) and returns `JSONResponse(value, headers=response_headers)` with `x-request-id`, `x-gateway-model`, and `x-gateway-endpoint` (`ingress.py:239-243`, `260`). Uvicorn writes the 200 JSON body to the client.
 
 ## Error paths
 
@@ -64,13 +64,13 @@ _Covers:_ seq 45, 46, 47, 58
 
 _Covers:_ seq 50, 51, 52, 56
 
-`authorize` (`ingress.py:181`) raises `GatewayError("unauthorized", 401)` when the Bearer header does not match. `chat`'s `except GatewayError` (`ingress.py:261`) builds `_error` (`ingress.py:101`), a JSONResponse with the sanitized code and `x-request-id`. Because the rejection happens before `opened = True` and `exchange` stays `None`, `chat` emits a `{"event": "request", "outcome": "rejected"}` record (seq 56, `ingress.py:264-273`).
+`authorize` (`ingress.py:187`) raises `GatewayError("unauthorized", 401)` when the Bearer header does not match. `chat`'s `except GatewayError` (`ingress.py:269`) builds `_error` (`ingress.py:101`), a JSONResponse with the sanitized code and `x-request-id`. Because the rejection happens before `opened = True` and `exchange` stays `None`, `chat` emits a `{"event": "request", "outcome": "rejected"}` record (seq 56, `ingress.py:272-281`).
 
 ### Invalid or oversized request
 
 _Covers:_ seq 53, 54, 55, 56
 
-`_validate` (`ingress.py:41`) raises 400-coded `GatewayError`s for a missing/non-string `model`, non-boolean `stream`, empty or malformed `messages`, invalid roles, unsupported content, and invalid tool calls/results. The body loop raises `request_too_large` (413, `ingress.py:223-224`) and the `json.loads` wrapper raises `invalid_json` (400, `ingress.py:225-228`). Since `opened` is still `False`, the rejected request event (seq 56) is emitted and `_error` returns the sanitized body.
+`_validate` (`ingress.py:41`) raises 400-coded `GatewayError`s for a missing/non-string `model`, non-boolean `stream`, empty or malformed `messages`, invalid roles, unsupported content, and invalid tool calls/results. The body loop raises `request_too_large` (413, `ingress.py:231-232`) and the `json.loads` wrapper raises `invalid_json` (400, `ingress.py:233-236`). Since `opened` is still `False`, the rejected request event (seq 56) is emitted and `_error` returns the sanitized body.
 
 ### Unknown model
 
@@ -88,7 +88,7 @@ _Covers:_ seq 61, 62, 63, 64, 65, 66, 67
 
 _Covers:_ seq 68, 69, 70, 71, 72, 73, 74
 
-After `open` returns, `chat` checks `exchange.response.status >= 400` and raises `upstream_rejected_request` with that status (`ingress.py:236-238`). This covers non-retryable statuses and a retryable status when no alternate replica exists (the single-replica case pinned by `tests/test_application.py:test_single_replica_keeps_rejected_response`). The upstream body is never forwarded. `chat`'s `finally` then calls `finish(exchange, "failed")` because `handed_off` is `False`, closing the upstream and emitting the terminal `outcome="failed"` event (seq 73, 74).
+After `open` returns, `chat` checks `exchange.response.status >= 400` and raises `upstream_rejected_request` with that status (`ingress.py:244-246`). This covers non-retryable statuses and a retryable status when no alternate replica exists (the single-replica case pinned by `tests/test_application.py:test_single_replica_keeps_rejected_response`). The upstream body is never forwarded. `chat`'s `finally` then calls `finish(exchange, "failed")` because `handed_off` is `False`, closing the upstream and emitting the terminal `outcome="failed"` event (seq 73, 74).
 
 ### Compression fallback
 
@@ -100,13 +100,13 @@ _Covers:_ seq 75, 76
 
 _Covers:_ seq 77, 78, 79, 73, 74
 
-`HttpxResponse.chunks` translates `httpx.HTTPError` into `GatewayError("upstream_read_failed")` (`httpx.py:32-33`). While buffering, `chat` raises `upstream_response_too_large` past 32 MiB (`ingress.py:247-248`) and `invalid_upstream_response` when the body is not a JSON object with `choices` and no `error` (`ingress.py:249-254`). Each is a `GatewayError`, so `chat` returns a 502 body and `finish` closes the upstream and emits the failed terminal event.
+`HttpxResponse.chunks` translates `httpx.HTTPError` into `GatewayError("upstream_read_failed")` (`httpx.py:32-33`). While buffering, `chat` raises `upstream_response_too_large` past 32 MiB (`ingress.py:255-256`) and `invalid_upstream_response` when the body is not a JSON object with `choices` and no `error` (`ingress.py:257-262`). Each is a `GatewayError`, so `chat` returns a 502 body and `finish` closes the upstream and emits the failed terminal event.
 
 ### Unexpected server failure
 
 _Covers:_ seq 80, 81, 82, 73, 74
 
-Any non-`GatewayError` exception is caught by `chat`'s `except Exception` (`ingress.py:278-291`), which records `status=500, error="request_failed"` on the exchange (or emits a failed request event when no exchange exists, seq 82) and returns a sanitized 500 body. The exception text is never exposed. When an exchange exists the terminal event comes from the `finally` `finish` (seq 73, 74).
+Any non-`GatewayError` exception is caught by `chat`'s `except Exception` (`ingress.py:286-299`), which records `status=500, error="request_failed"` on the exchange (or emits a failed request event when no exchange exists, seq 82) and returns a sanitized 500 body. The exception text is never exposed. When an exchange exists the terminal event comes from the `finally` `finish` (seq 73, 74).
 
 ## Anomalies
 
@@ -114,7 +114,7 @@ Any non-`GatewayError` exception is caught by `chat`'s `except Exception` (`ingr
 
 _Covers:_ seq 85, 86, 87
 
-`Gateway.finish` closes the upstream inside a `try` whose `finally` always emits the terminal event (`application.py:256-261`). If `HttpxResponse.close` (`httpx.py:35-37`, delegating to `httpx.Response.aclose`) raises — plausible after a body read that already failed with `upstream_read_failed` — the event is emitted with `outcome="completed"` (seq 86) and then the exception propagates out of `finish` into `chat`'s `finally` (`ingress.py:292-295`). Because that `finally` runs while unwinding a successful `return JSONResponse(...)`, the raised exception replaces the return value, so the client receives an ASGI server error instead of the completion that was already built and logged as completed. The non-streaming path has no shield or fallback around the close itself; only the caller is shielded.
+`Gateway.finish` closes the upstream inside a `try` whose `finally` always emits the terminal event (`application.py:256-261`). If `HttpxResponse.close` (`httpx.py:35-37`, delegating to `httpx.Response.aclose`) raises — plausible after a body read that already failed with `upstream_read_failed` — the event is emitted with `outcome="completed"` (seq 86) and then the exception propagates out of `finish` into `chat`'s `finally` (`ingress.py:300-303`). Because that `finally` runs while unwinding a successful `return JSONResponse(...)`, the raised exception replaces the return value, so the client receives an ASGI server error instead of the completion that was already built and logged as completed. The non-streaming path has no shield or fallback around the close itself; only the caller is shielded.
 
 ### Replica cooldown and round-robin state dies on restart
 
@@ -126,7 +126,7 @@ _Covers:_ seq 90
 
 _Covers:_ seq 91
 
-The streaming branch rejects an upstream 200 whose `content-type` lacks `text/event-stream` with `invalid_upstream_stream` (`ingress.py:239-241`). The non-streaming branch has no equivalent check: it buffers any 200 body and attempts `json.loads` (`ingress.py:244-254`), so a wrong-content-type response (for example an HTML error page from a proxy that returns 200) is reported as the generic `invalid_upstream_response` 502 rather than a content-type failure. The asymmetry is intentional-looking but undocumented, and it makes a misconfigured backend harder to distinguish from a genuinely malformed one.
+The streaming branch rejects an upstream 200 whose `content-type` lacks `text/event-stream` with `invalid_upstream_stream` (`ingress.py:247-249`). The non-streaming branch has no equivalent check: it buffers any 200 body and attempts `json.loads` (`ingress.py:252-262`), so a wrong-content-type response (for example an HTML error page from a proxy that returns 200) is reported as the generic `invalid_upstream_response` 502 rather than a content-type failure. The asymmetry is intentional-looking but undocumented, and it makes a misconfigured backend harder to distinguish from a genuinely malformed one.
 
 ## Verification
 

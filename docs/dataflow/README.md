@@ -43,12 +43,12 @@ are placed in group 3, the closest fit in this legend.
 
 | Lifecycle | Entry point | Location | Graph | Nodes / links |
 | --- | --- | --- | --- | --- |
-| Health check | `GET /health/liveliness`, `GET /health/readiness` | [ingress.py:189](../../src/switchyard_gateway/adapters/ingress.py) `create_app.health` | [health-check.json](health-check.json) · [md](health-check.md) | 5 / 7 |
-| Model discovery | `GET /v1/models` | [ingress.py:193](../../src/switchyard_gateway/adapters/ingress.py) `create_app.models` | [model-discovery.json](model-discovery.json) · [md](model-discovery.md) | 12 / 24 |
-| Chat completion (JSON) | `POST /v1/chat/completions` | [ingress.py:212](../../src/switchyard_gateway/adapters/ingress.py) `create_app.chat` | [chat-completion.json](chat-completion.json) · [md](chat-completion.md) | 18 / 78 |
-| Chat completion (SSE) | `POST /v1/chat/completions` with `stream: true` | [ingress.py:212](../../src/switchyard_gateway/adapters/ingress.py) `create_app.chat` → `sse_body` / `OwnedStream` | [chat-stream.json](chat-stream.json) · [md](chat-stream.md) | 20 / 75 |
-| Application lifespan | FastAPI lifespan enter/exit | [bootstrap.py:38](../../src/switchyard_gateway/bootstrap.py) `build_app.lifespan` | [app-lifespan.json](app-lifespan.json) · [md](app-lifespan.md) | 15 / 47 |
-| CLI startup | `switchyard-gateway [--config] [--check]` | [bootstrap.py:51](../../src/switchyard_gateway/bootstrap.py) `main` | [cli-startup.json](cli-startup.json) · [md](cli-startup.md) | 23 / 46 |
+| Health check | `GET /health/liveliness`, `GET /health/readiness` | [ingress.py:195](../../src/switchyard_gateway/adapters/ingress.py) `create_app.health` | [health-check.json](health-check.json) · [md](health-check.md) | 5 / 7 |
+| Model discovery | `GET /v1/models` | [ingress.py:199](../../src/switchyard_gateway/adapters/ingress.py) `create_app.models` | [model-discovery.json](model-discovery.json) · [md](model-discovery.md) | 12 / 24 |
+| Chat completion (JSON) | `POST /v1/chat/completions` | [ingress.py:219](../../src/switchyard_gateway/adapters/ingress.py) `create_app.chat` | [chat-completion.json](chat-completion.json) · [md](chat-completion.md) | 18 / 78 |
+| Chat completion (SSE) | `POST /v1/chat/completions` with `stream: true` | [ingress.py:219](../../src/switchyard_gateway/adapters/ingress.py) `create_app.chat` → `sse_body` / `OwnedStream` | [chat-stream.json](chat-stream.json) · [md](chat-stream.md) | 20 / 75 |
+| Application lifespan | FastAPI lifespan enter/exit | [bootstrap.py:28](../../src/switchyard_gateway/bootstrap.py) `build_app.lifespan` | [app-lifespan.json](app-lifespan.json) · [md](app-lifespan.md) | 15 / 52 |
+| CLI startup | `switchyard-gateway [--config] [--check]` | [bootstrap.py:73](../../src/switchyard_gateway/bootstrap.py) `main` | [cli-startup.json](cli-startup.json) · [md](cli-startup.md) | 23 / 59 |
 
 Out of scope: `scripts/smoke.py`, `scripts/container_smoke.py`, and
 `scripts/benchmark.py` are operator/test tools, not product boundaries.
@@ -64,18 +64,6 @@ authoritative and cites the code.
   `application.py:Gateway.__init__` keeps `_positions`/`_cooldowns` in process
   memory, so a restart forgets round-robin position and cools nothing down.
 
-### Resources outlive or precede their owner
-
-- [app-lifespan](app-lifespan.md) — the startup `emit` sits outside the
-  `try/finally`; the `finally` closes the HTTP client and compressor
-  sequentially, so a raising `aclose()` skips `compressor.close()`; and
-  `build_app` allocates both before Uvicorn owns them, so a bind/start failure
-  never enters the lifespan.
-- [cli-startup](cli-startup.md) — the same construction-before-ownership gap is
-  the CLI-side view: a Uvicorn start failure skips lifespan cleanup.
-- [app-lifespan](app-lifespan.md) — no shutdown/stopped event is emitted, so
-  orderly teardown is invisible in the log.
-
 ### Failures swallowed or hidden from the caller
 
 - [chat-stream](chat-stream.md) — `ingress.py:sse_body` catches `Exception`,
@@ -89,9 +77,7 @@ authoritative and cites the code.
 - [chat-completion](chat-completion.md) — the non-streaming branch has no
   upstream `content-type` guard (the streaming branch does), so a wrong-type 200
   surfaces as a generic `invalid_upstream_response` 502.
-- [cli-startup](cli-startup.md) — `argparse` errors exit 2 on stderr before the
-  `GatewayError` handler, so malformed invocations never emit the JSON
-  `startup_failed` record; and `silence_dependency_logs` disables logging
+- [cli-startup](cli-startup.md) — `silence_dependency_logs` disables logging
   process-globally without restoring it.
 
 ### Probes and side effects absent where expected

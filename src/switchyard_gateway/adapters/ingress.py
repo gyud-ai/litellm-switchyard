@@ -172,13 +172,19 @@ class OwnedStream(StreamingResponse):
 
 
 def create_app(
-    gateway: Gateway,
+    gateway: Gateway | None = None,
     lifespan: Callable[[FastAPI], AbstractAsyncContextManager[None]] | None = None,
 ) -> FastAPI:
-    """Build the HTTP adapter around an already-wired application."""
+    """Build the HTTP adapter; a lifespan may install the gateway on app.state."""
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+    if gateway is not None:
+        app.state.gateway = gateway
 
-    def authorize(request: Request) -> None:
+    def current(request: Request) -> Gateway:
+        current_gateway: Gateway = request.app.state.gateway
+        return current_gateway
+
+    def authorize(request: Request, gateway: Gateway) -> None:
         expected = f"Bearer {gateway.settings.api_key}".encode()
         actual = request.headers.get("authorization", "").encode()
         if not hmac.compare_digest(actual, expected):
@@ -192,8 +198,9 @@ def create_app(
     @app.get("/v1/models")
     async def models(request: Request) -> JSONResponse:
         request_id = uuid.uuid4().hex
+        gateway = current(request)
         try:
-            authorize(request)
+            authorize(request, gateway)
             names = [*gateway.settings.pairs, *gateway.settings.models]
             return JSONResponse(
                 {
@@ -215,8 +222,9 @@ def create_app(
         handed_off = False
         opened = False
         outcome = "failed"
+        gateway = current(request)
         try:
-            authorize(request)
+            authorize(request, gateway)
             data = bytearray()
             async for chunk in request.stream():
                 data.extend(chunk)
